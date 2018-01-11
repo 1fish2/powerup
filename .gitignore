@@ -1,0 +1,59 @@
+# Compiled source
+*.pyc
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+
+# Coverage file
+.coverage
+coverage.xml
+
+# Nosetests file
+nosetests.xml
+nosetests.*.xml
+
+# Temporary files
+/tmp/
+
+# C extensions
+*.so
+*.o
+
+# kernprof.py output
+*.lprof
+
+# pyenv python version
+.python-version
+
+# Sublime Files
+*.sublime*
+
+# Misc
+/build/
+
+# PyCharm files
+# User-specific stuff:
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/dictionaries
+.idea/vcs.xml
+.idea/jsLibraryMappings.xml
+.idea/libraries
+.idea/codeStyleSettings.xml
+
+# Potentially OK if editing it to project-jdk-name="Python 2.7" works:
+.idea/misc.xml
+
+# Sensitive or high-churn files:
+.idea/dataSources.ids
+.idea/dataSources.xml
+.idea/dataSources.local.xml
+.idea/sqlDataSources.xml
+.idea/dynamic.xml
+.idea/uiDesigner.xml
+
+# Gradle:
+.idea/gradle.xml
+.idea/libraries
