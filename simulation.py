@@ -1,19 +1,40 @@
-"""
-Simulation framework for FRC Powerup sim.
+#!/usr/bin/env python
 
-TODO: The rest of scoring, ranking points, scale, robot behaviors, driver behaviors.
-TODO: Using RED/''/BLUE strings seems Pythonic but would integers be simpler?
+"""
+FRC PowerUp game score simulation.
+
+TODO: Scale, robot behaviors, driver behaviors;
+More scoring: auto-run across the line, parked on platform, climb, ...;
+Robot locations:
+    outer zone {red, blue} outside the auto-line (TODO: Finer-grained?),
+    inner zone {red, blue} inside the auto-line (TODO: Finer-grained?),
+    platform zone {red, blue},
+    null territory {front, back},
+Cube locations (optionally preloaded in robots at game start):
+    portals {red, blue} x {front, back},
+    exchange (zone) {red, blue},
+    outer zone {red, blue} outside the auto-line,
+    inner zone {red, blue} inside the auto-line,
+    platform zone {red, blue},
+    null territory {front, back},
+    on a Switch plate {red, blue} x {front, back},
+    on a Scale plate {front, back},
+    in a robot {red 1 - 3, blue 1 - 3},
+    Vault {red, blue} x {force, levitate, boost}.
+Power-ups {force, levitate, boost} {unused, queued, played};
+Portals;
+Ranking points: 2 for win, 1 for tie, +1 for 3-robot climb, +1 for auto-quest (3 auto-runs AND own your switch).
+Enforce various rules, e.g. at least 5 cubes in each portal at start-of-match.
+
+TODO: Track details and output CSV data. One row per second? Columns for all the scoring components + RPs?
 """
 
 from itertools import chain
 
-# Alliance colors.
-RED = 'red'
-BLUE = 'blue'
-
 AUTONOMOUS_SECS = 15
 TELEOP_SECS = 2 * 60 + 15
 GAME_SECS = AUTONOMOUS_SECS + TELEOP_SECS
+ENDGAME_SECS = 30
 BOOST_SECS = 10
 FORCE_SECS = 10
 
@@ -22,14 +43,17 @@ GAIN_SWITCH_AUTO_POINTS = 2
 GAIN_SCALE_AUTO_POINTS = 2
 
 
-def opposite(color):
-    return {RED: BLUE, BLUE: RED}[color]
+class Color(str):
+    pass
+
+
+# Alliance colors.
+RED, BLUE = Color('red'), Color('blue')
+RED.opposite, BLUE.opposite = BLUE, RED
 
 
 class Agent(object):
-    """
-    An Agent has time-based behaviors in a Simulation.
-    """
+    """An Agent in a Simulation has time-based behaviors."""
 
     def __init__(self):
         self.simulation = None
@@ -43,6 +67,7 @@ class Agent(object):
         return self.simulation.autonomous
 
     def update(self, time):
+        """Update this Agent for the new value of time."""
         pass
 
 
@@ -51,9 +76,7 @@ class GameOver(Exception):
 
 
 class Simulation(object):
-    """
-    A Simulation advances time and updates its Agents.
-    """
+    """A Simulation advances time and updates its Agents."""
 
     def __init__(self):
         self.time = 0
@@ -61,13 +84,16 @@ class Simulation(object):
 
     @property
     def autonomous(self):
+        """Return True during the autonomous period."""
         return self.time < AUTONOMOUS_SECS
 
     def add(self, agent):
+        """Add an Agent to this Simulation."""
         agent.simulation = self
         self.agents.append(agent)
 
     def tick(self):
+        """Advance time by 1 second, updating all Agents."""
         time = self.time + 1
         if time >= GAME_SECS:
             raise GameOver()
@@ -90,11 +116,13 @@ class Robot(Agent):
         self.has_cube = False
 
     def pickup(self):
-        # TODO: Check if not self.has_cube? Check and decrement the number of cubes here.
+        """Pick up a cube here."""
+        # TODO: Check if not self.has_cube? Check and decrement the number of cubes in this place.
         self.has_cube = True
 
     def drop(self):
-        # TODO: Check if self.has_cube? Increment the number of cubes here.
+        """Drop a cube here."""
+        # TODO: Check if self.has_cube? Increment the number of cubes in this place.
         self.has_cube = False
 
 
@@ -115,6 +143,7 @@ class Switch(Agent):
         self.boost_timeout = 0
 
     def add_cube(self, side):
+        """Add a cube to the front (0) or back (1) side of the Switch."""
         self.cubes[side] += 1
 
     def force(self, alliance):
@@ -123,6 +152,7 @@ class Switch(Agent):
             self.forced_timeout = self.time + FORCE_SECS
 
     def boost(self, alliance):
+        """Start an alliance Boost now."""
         self.boosted = True
         self.boost_timeout = self.time + BOOST_SECS
 
@@ -135,12 +165,12 @@ class Switch(Agent):
 
     def controlled_by(self):
         """
-        :return: RED, '', or BLUE, indicating which alliance controls this Switch.
+        :return: RED, '', or BLUE, indicating which alliance currently controls this Switch.
         """
         if self.forced:
             return self.alliance_end
         tilt = self.cubes[0].__cmp__(self.cubes[1])  # <, ==, > :: -1, 0, 1
-        return [opposite(self.front_color), '', self.front_color][tilt + 1]
+        return [self.front_color.opposite, '', self.front_color][tilt + 1]
 
     def score(self):
         """
@@ -153,23 +183,36 @@ class Switch(Agent):
         return value if c == RED else 0, value if c == BLUE else 0
 
 
-class PowerupGame(Simulation):
+class PowerUpGame(Simulation):
     def __init__(self):
-        super(PowerupGame, self).__init__()
+        super(PowerUpGame, self).__init__()
         self.red_score = 0
         self.blue_score = 0
 
         self.robots = [Robot(alliance, player) for alliance in (RED, BLUE) for player in xrange(1, 4)]
 
-        switch_colors = {RED: RED, BLUE: RED}  # TODO: Define an initial-conditions vector for these FMS choices
-        self.switches = [Switch(alliance, switch_colors[alliance]) for alliance in (RED, BLUE)]
+        # TODO: Define an initial-conditions vector for these FMS choices
+        switch_front_colors = {RED: RED, BLUE: RED}  # alliance_end -> front_color
+        self.switches = [Switch(alliance, switch_front_colors[alliance]) for alliance in (RED, BLUE)]
 
         for agent in chain(self.robots, self.switches):
             self.add(agent)
 
     def tick(self):
-        super(PowerupGame, self).tick()
+        super(PowerUpGame, self).tick()
         for switch in self.switches:
             red, blue = switch.score()
             self.red_score += red
             self.blue_score += blue
+
+    def play(self):
+        """Play out the simulated game."""
+        for t in xrange(GAME_SECS):
+            self.tick()
+            # TODO: Output a CSV row of score data?
+        print "Final score Red: {}, Blue: {}".format(self.red_score, self.blue_score)
+
+
+if __name__ == "__main__":
+    game = PowerUpGame()
+    game.play()
