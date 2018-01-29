@@ -3,30 +3,47 @@
 """
 FRC PowerUp game score simulation.
 
-TODO: Scale, robot behaviors, driver behaviors;
-More scoring: auto-run across the line, parked on platform, climb, ...;
+TODO: Robot behaviors, driver behaviors, queued power-ups;
+More scoring: auto-run reach the line, parked, climbed, ...;
 Robot locations:
-    outer zone {red, blue} outside the auto-line (TODO: Finer-grained?),
-    inner zone {red, blue} inside the auto-line (TODO: Finer-grained?),
-    platform zone {red, blue},
-    null territory {front, back},
-Cube locations (optionally preloaded in robots at game start):
-    portals {red, blue} x {front, back},
-    exchange (zone) {red, blue},
-    outer zone {red, blue} outside the auto-line,
-    inner zone {red, blue} inside the auto-line,
-    platform zone {red, blue},
-    null territory {front, back},
-    on a Switch plate {red, blue} x {front, back},
-    on a Scale plate {front, back},
-    in a robot {red 1 - 3, blue 1 - 3},
-    Vault {red, blue} x {force, levitate, boost}.
-Power-ups {force, levitate, boost} {unused, queued, played};
+    Exchange zone {red, blue}
+    Portal {red, blue} x {front, back} -- Scoring Table is at the back side
+    Power Cube zone {red, blue}
+    Switch fence {red, blue}
+    outer zone {red, blue} outside the auto-line
+    inner zone {red, blue} inside the auto-line
+    Platform zone {red, blue} (climbed, parked, or not)
+    Null Territory {front, back}
+Cube locations:
+    Exchange zone {red, blue}
+    Portal {red, blue} x {front, back}
+    Power Cube zone {red, blue}
+    Switch fence {red, blue}
+    outer zone {red, blue} outside the auto-line (excluding the Power Cube zones)
+    inner zone {red, blue} inside the auto-line (excluding the Power Cube zones)
+    Platform zone {red, blue} (excluding the Switch fences)
+    Null Territory {front, back}
+    Switch plate {red, blue} x {front, back}
+    Scale plate {front, back}
+    Vault {red, blue} x {force, levitate, boost}
+    in a Robot {red 1 - 3, blue 1 - 3}
+Power-ups {red, blue} x {force, levitate, boost} {unused, queued, played};
 Portals;
-Ranking points: 2 for win, 1 for tie, +1 for 3-robot climb, +1 for auto-quest (3 auto-runs AND own your switch).
+Ranking points: 2 for win, 1 for tie, +1 for 3-robot climb, +1 for auto-quest
+(3 auto-runs AND own your switch).
 Enforce various rules, e.g. at least 5 cubes in each portal at start-of-match.
 
-TODO: Track details and output CSV data. One row per second? Columns for all the scoring components + RPs?
+TODO: Output one CSV row per time step:
+    Time
+    Scores
+    Switch and Scale ownership, #cubes, TODO: also forced and boosted state?
+    Robots: location, #cubes [0 .. 1], {climbed, parked, not}, current action
+    Other cube locations
+
+Example robot actions: "scoring in switch", "getting cube from left portal",
+"going to climb", "climbing".
+
+Maybe split this file into framework simulation.py, agents, and game.py.
 """
 
 from itertools import chain
@@ -67,7 +84,7 @@ class Agent(object):
         return self.simulation.autonomous
 
     def update(self, time):
-        """Update this Agent for the new value of time."""
+        """Called once per time step to update this Agent."""
         pass
 
 
@@ -126,82 +143,117 @@ class Robot(Agent):
         self.has_cube = False
 
 
-class Switch(Agent):
-    def __init__(self, alliance_end, front_color):
+class Scale(Agent):
+    """A Scale, also the base class for Switch."""
+    def __init__(self, front_color):
         """
-        :param alliance_end: RED or BLUE end of the field
         :param front_color: RED or BLUE, selected by the FMS
         """
-        super(Switch, self).__init__()
-        self.alliance_end = alliance_end
+        super(Scale, self).__init__()
         self.front_color = front_color
 
         self.cubes = [0, 0]  # [front, back] side cube counts
         self.forced = False
-        self.forced_timeout = 0
+        self.force_timeout = 0
+        self.force_alliance = ''
         self.boosted = False
         self.boost_timeout = 0
+        self.boost_alliance = ''
+        self.previous_owner = ''
 
     def add_cube(self, side):
         """Add a cube to the front (0) or back (1) side of the Switch."""
         self.cubes[side] += 1
 
     def force(self, alliance):
-        if alliance == self.alliance_end:
-            self.forced = True
-            self.forced_timeout = self.time + FORCE_SECS
+        """Start an alliance Force."""
+        if self.autonomous:
+            raise RuntimeError("Can't Force during autonomous")
+        self.forced = True
+        self.force_timeout = self.time + FORCE_SECS
+        self.force_alliance = alliance
 
     def boost(self, alliance):
-        """Start an alliance Boost now."""
+        """Start an alliance Boost."""
+        if self.autonomous:
+            raise RuntimeError("Can't Boost during autonomous")
         self.boosted = True
         self.boost_timeout = self.time + BOOST_SECS
+        self.boost_alliance = alliance
 
     def update(self, time):
-        super(Switch, self).update(time)
-        if time >= self.boost_timeout:
-            self.boosted = False
-        if time >= self.forced_timeout:
+        super(Scale, self).update(time)
+        if self.forced and time >= self.force_timeout:
             self.forced = False
+            self.force_alliance = ''
+        if self.boosted and time >= self.boost_timeout:
+            self.boosted = False
+            self.boost_alliance = ''
 
-    def controlled_by(self):
-        """
-        :return: RED, '', or BLUE, indicating which alliance currently controls this Switch.
-        """
+    def owner(self):
+        """Returns which alliance currently "owns" this Scale: RED, '', or BLUE."""
         if self.forced:
-            return self.alliance_end
+            return self.force_alliance
         tilt = self.cubes[0].__cmp__(self.cubes[1])  # <, ==, > :: -1, 0, 1
-        return [self.front_color.opposite, '', self.front_color][tilt + 1]
+        return (self.front_color.opposite, '', self.front_color)[tilt + 1]
 
     def score(self):
+        """Returns (red_score, blue_score) earned this time step."""
+        owner = self.owner()
+        boosted = self.boosted and self.boost_alliance is owner
+        value = 2 if self.autonomous or boosted else 1
+        if owner is not self.previous_owner:  # just established ownership
+            self.previous_owner = owner
+            value *= 2
+        return value if owner is RED else 0, value if owner is BLUE else 0
+
+
+class Switch(Scale):
+    def __init__(self, alliance_end, front_color):
         """
-        :return: (red_score, blue_score) earned this time unit
+        :param alliance_end: RED or BLUE end of the field
+        :param front_color: RED or BLUE, selected by the FMS
         """
-        # TODO: Add points when gaining control of the switch? Or is it ownership at end of the period?
-        # Can an alliance boost a Switch when the other alliance is scoring it?
-        value = (2 if self.autonomous else 1) * (2 if self.boosted else 1)
-        c = self.controlled_by()
-        return value if c == RED else 0, value if c == BLUE else 0
+        super(Switch, self).__init__(front_color)
+        self.alliance_end = alliance_end
+
+    def force(self, alliance):
+        """Start an alliance Force; no-op if this isn't the alliance's Switch."""
+        if alliance is self.alliance_end:
+            super(Switch, self).force(alliance)
+
+    def boost(self, alliance):
+        """Start an alliance Boost; no-op if this isn't the alliance's Switch."""
+        if alliance is self.alliance_end:
+            super(Switch, self).boost(alliance)
+
+    def owner(self):
+        o = super(Switch, self).owner()
+        return o if o is self.alliance_end else ''
 
 
 class PowerUpGame(Simulation):
     def __init__(self):
         super(PowerUpGame, self).__init__()
+        # TODO: An initial-conditions vector for the FMS choices.
+        switch_front_color = RED
+        scale_front_color = BLUE
+
         self.red_score = 0
         self.blue_score = 0
 
         self.robots = [Robot(alliance, player) for alliance in (RED, BLUE) for player in xrange(1, 4)]
 
-        # TODO: Define an initial-conditions vector for these FMS choices
-        switch_front_colors = {RED: RED, BLUE: RED}  # alliance_end -> front_color
-        self.switches = [Switch(alliance, switch_front_colors[alliance]) for alliance in (RED, BLUE)]
+        self.seesaws = [Switch(alliance, switch_front_color) for alliance in (RED, BLUE)]
+        self.seesaws.append(Scale(scale_front_color))
 
-        for agent in chain(self.robots, self.switches):
+        for agent in chain(self.robots, self.seesaws):
             self.add(agent)
 
     def tick(self):
         super(PowerUpGame, self).tick()
-        for switch in self.switches:
-            red, blue = switch.score()
+        for seesaw in self.seesaws:
+            red, blue = seesaw.score()
             self.red_score += red
             self.blue_score += blue
 
@@ -209,8 +261,20 @@ class PowerUpGame(Simulation):
         """Play out the simulated game."""
         for t in xrange(GAME_SECS):
             self.tick()
-            # TODO: Output a CSV row of score data?
+            # TODO: Output a CSV row of score and state data.
         print "Final score Red: {}, Blue: {}".format(self.red_score, self.blue_score)
+
+    def force(self, alliance):
+        # TODO: Switch, Scale, or both depending on #cubes.
+        # TODO: Once per type per alliance, with queuing.
+        for seesaw in self.seesaws:
+            seesaw.force(alliance)
+
+    def boost(self, alliance):
+        # TODO: Switch, Scale, or both depending on #cubes.
+        # TODO: Once per type per alliance, with queuing.
+        for seesaw in self.seesaws:
+            seesaw.boost(alliance)
 
 
 if __name__ == "__main__":
