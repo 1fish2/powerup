@@ -61,12 +61,47 @@ GAIN_SCALE_AUTO_POINTS = 2
 
 
 class Color(str):
+    """An alliance color value that allows a .opposite property."""
     pass
 
 
-# Alliance colors.
+# Singleton alliance Color objects.
 RED, BLUE = Color('red'), Color('blue')
 RED.opposite, BLUE.opposite = BLUE, RED
+
+
+class Score(object):
+    """An incremental or final match score."""
+
+    @classmethod
+    def pick(cls, color, value):
+        """Returns a Score where RED or BLUE or neither gets the given value."""
+        return cls(value if color is RED else 0, value if color is BLUE else 0)
+
+    def __init__(self, red, blue):
+        """Returns a Score with the given red and blue point values."""
+        self._red_points = red
+        self._blue_points = blue
+
+    @property
+    def red(self):
+        """Returns red's points."""
+        return self._red_points
+
+    @property
+    def blue(self):
+        """Returns blue's points."""
+        return self._blue_points
+
+    def __repr__(self):
+        return 'Score(red={}, blue={})'.format(self.red, self.blue)
+
+    def __add__(self, other):
+        """Adds two Score values. Useful with sum([scores...], Score.ZERO)."""
+        return type(self)(self.red + other.red, self.blue + other.blue)
+
+
+Score.ZERO = Score(0, 0)
 
 
 class Agent(object):
@@ -86,6 +121,10 @@ class Agent(object):
     def update(self, time):
         """Called once per time step to update this Agent."""
         pass
+
+    def score(self):
+        """Returns the RED and BLUE points Score earned this time step."""
+        return Score.ZERO
 
 
 class GameOver(Exception):
@@ -112,7 +151,7 @@ class Simulation(object):
     def tick(self):
         """Advance time by 1 second, updating all Agents."""
         time = self.time + 1
-        if time >= GAME_SECS:
+        if time > GAME_SECS:
             raise GameOver()
         self.time = time
 
@@ -205,7 +244,7 @@ class Scale(Agent):
         if owner is not self.previous_owner:  # just established ownership
             self.previous_owner = owner
             value *= 2
-        return value if owner is RED else 0, value if owner is BLUE else 0
+        return Score.pick(owner, value)
 
 
 class Switch(Scale):
@@ -239,8 +278,7 @@ class PowerUpGame(Simulation):
         switch_front_color = RED
         scale_front_color = BLUE
 
-        self.red_score = 0
-        self.blue_score = 0
+        self.score = Score.ZERO
 
         self.robots = [Robot(alliance, player) for alliance in (RED, BLUE) for player in xrange(1, 4)]
 
@@ -251,18 +289,16 @@ class PowerUpGame(Simulation):
             self.add(agent)
 
     def tick(self):
+        """Advance time and update the running score."""
         super(PowerUpGame, self).tick()
-        for seesaw in self.seesaws:
-            red, blue = seesaw.score()
-            self.red_score += red
-            self.blue_score += blue
+        self.score = sum((agent.score() for agent in self.agents), self.score)
 
     def play(self):
         """Play out the simulated game."""
         for t in xrange(GAME_SECS):
             self.tick()
             # TODO: Output a CSV row of score and state data.
-        print "Final score Red: {}, Blue: {}".format(self.red_score, self.blue_score)
+        print "Final score: {}".format(self.score)
 
     def force(self, alliance):
         # TODO: Switch, Scale, or both depending on #cubes.
