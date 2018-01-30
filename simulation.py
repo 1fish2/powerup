@@ -232,7 +232,10 @@ class Scale(Agent):
         self.cubes[side] += 1
 
     def force(self, alliance):
-        """Start an alliance Force."""
+        """
+        Start an alliance Force power-up.
+        NOTE: VaultColumn.play() relies on this method selector name and signature.
+        """
         if self.autonomous:
             raise RuntimeError("Can't Force during autonomous")
         self.forced = True
@@ -240,7 +243,10 @@ class Scale(Agent):
         self.force_alliance = alliance
 
     def boost(self, alliance):
-        """Start an alliance Boost."""
+        """
+        Start an alliance Boost power-up.
+        NOTE: VaultColumn.play() relies on this method selector name and signature.
+        """
         if self.autonomous:
             raise RuntimeError("Can't Boost during autonomous")
         self.boosted = True
@@ -304,11 +310,15 @@ class Switch(Scale):
 
 
 class VaultColumn(Agent):
-    def __init__(self, alliance, name):
-        """RED or BLUE alliance; name is Force, Levitate, or Boost."""
+    def __init__(self, alliance, action, switch, scale):
+        """
+        RED or BLUE alliance.
+        action is 'force' or 'boost' (a Scale/Switch method selector) or 'levitate'.
+        """
         super(VaultColumn, self).__init__()
         self.alliance = alliance
-        self.name = name
+        self.action = action
+        self.switch, self.scale = switch, scale
 
         self._cubes = 0
         self.previous_cubes = 0
@@ -319,7 +329,7 @@ class VaultColumn(Agent):
 
     def __str__(self):
         return "VaultColumn({} {}) with {} Cubes".format(
-            self.alliance, self.name, self._cubes)
+            self.alliance, self.action, self._cubes)
 
     def add(self, cubes):
         # type: (int) -> int
@@ -331,8 +341,20 @@ class VaultColumn(Agent):
         self._cubes += cubes
         return self._cubes
 
-    def selects(self):
-        return ('', 'Switch', 'Scale', 'Switch Scale')[self._cubes]
+    def selected(self):
+        """Returns a tuple of the seesaws selected by the current number of cubes."""
+        return ((), (self.switch,), (self.scale,), (self.switch, self.scale))[self._cubes]
+
+    def play(self):
+        """Play this power-up."""
+        if self.action == "levitate":
+            if self.cubes == 3:
+                # TODO: Implement.
+                pass
+        else:
+            # TODO: Queueing, one-shot, and no-op cases.
+            for seesaw in self.selected():
+                getattr(seesaw, self.action)(self.alliance)
 
     def score(self):
         score = Score.pick(self.alliance, 5 * (self._cubes - self.previous_cubes))
@@ -343,15 +365,16 @@ class VaultColumn(Agent):
 class Vault(Agent):
     """
     An alliance's Vault for power-ups.
-    Example usage: vault.force.add(1), or maybe change it to vault['Force'].add(1).
+    Example usage: vault.force.play(), or maybe change it to vault['force'].play().
     """
 
-    def __init__(self, alliance):
+    def __init__(self, alliance, switch, scale):
         super(Vault, self).__init__()
         self.alliance = alliance
-        self.columns = tuple(VaultColumn(alliance, name)
-                             for name in ('Force', 'Levitate', 'Boost'))
+        self.columns = tuple(VaultColumn(alliance, action, switch, scale)
+                             for action in ('force', 'levitate', 'boost'))
         self.force, self.levitate, self.boost = self.columns
+        self.switch, self.scale = switch, scale
 
     def __str__(self):
         cubes = [column.cubes for column in self.columns]
@@ -376,10 +399,12 @@ class PowerUpGame(Simulation):
         self.robots = [Robot(alliance, player)
                        for alliance in (RED, BLUE)
                        for player in xrange(1, 4)]
-        self.seesaws = [Switch(RED, switch_front_color),
-                        Switch(BLUE, switch_front_color),
-                        Scale(scale_front_color)]
-        self.vaults = [Vault(RED), Vault(BLUE)]
+        red_switch = Switch(RED, switch_front_color)
+        blue_switch = Switch(BLUE, switch_front_color)
+        scale = Scale(scale_front_color)
+        self.seesaws = [red_switch, blue_switch, scale]
+        self.vaults = [Vault(RED, red_switch, scale),
+                       Vault(BLUE, blue_switch, scale)]
 
         for agent in chain(self.robots, self.seesaws, self.vaults):
             self.add(agent)
