@@ -60,16 +60,6 @@ GAIN_SWITCH_AUTO_POINTS = 2
 GAIN_SCALE_AUTO_POINTS = 2
 
 
-def plural(count, singular_form, plural_form):
-    """Returns singular_form for plural_form as befits count."""
-    return singular_form if count == 1 else plural_form
-
-
-def num_cubes(count):
-    """Returns '0 Cubes' or '1 Cube' or ..."""
-    return "{} {}".format(count, plural(count, 'Cube', 'Cubes'))
-
-
 class Color(str):
     """An alliance color value that allows a .opposite property."""
     pass
@@ -187,8 +177,8 @@ class Robot(Agent):
         self.cubes = 0
 
     def __str__(self):
-        return "Robot({}{}) with {}".format(
-            self.alliance, self.player, num_cubes(self.cubes))
+        return "Robot({}{}) with {} Cube(s)".format(
+            self.alliance, self.player, self.cubes)
 
     def pickup(self):
         """Pick up a cube here."""
@@ -224,8 +214,8 @@ class Scale(Agent):
         self.previous_owner = ''
 
     def __str__(self):
-        return "{}(/{}) with {}".format(
-            self.__class__, self.front_color, num_cubes(self.cubes))
+        return "{}(/{}) with {} Cube(s)".format(
+            self.__class__, self.front_color, self.cubes)
 
     def add_cube(self, side):
         """Add a cube to the front (0) or back (1) side of the Switch."""
@@ -290,9 +280,8 @@ class Switch(Scale):
         self.alliance_end = alliance_end
 
     def __str__(self):
-        return "{}({}/{}) with {}".format(
-            self.__class__, self.alliance_end, self.front_color,
-            num_cubes(self.cubes))
+        return "{}({}/{}) with {} Cube(s)".format(
+            self.__class__, self.alliance_end, self.front_color, self.cubes)
 
     def force(self, alliance):
         """Start an alliance Force; no-op if this isn't the alliance's Switch."""
