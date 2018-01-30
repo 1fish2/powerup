@@ -365,7 +365,7 @@ class VaultColumn(Agent):
 class Vault(Agent):
     """
     An alliance's Vault for power-ups.
-    Example usage: vault.force.play(), or maybe change it to vault['force'].play().
+    Example usage: vault.force.play().
     """
 
     def __init__(self, alliance, switch, scale):
@@ -403,10 +403,10 @@ class PowerUpGame(Simulation):
         blue_switch = Switch(BLUE, switch_front_color)
         scale = Scale(scale_front_color)
         self.seesaws = [red_switch, blue_switch, scale]
-        self.vaults = [Vault(RED, red_switch, scale),
-                       Vault(BLUE, blue_switch, scale)]
+        self.vaults = {RED: Vault(RED, red_switch, scale),
+                       BLUE: Vault(BLUE, blue_switch, scale)}
 
-        for agent in chain(self.robots, self.seesaws, self.vaults):
+        for agent in chain(self.robots, self.seesaws, self.vaults.itervalues()):
             self.add(agent)
 
         self.score = Score.ZERO
@@ -424,16 +424,13 @@ class PowerUpGame(Simulation):
         print "Final score: {}".format(self.score)
 
     def force(self, alliance):
-        # TODO: Switch, Scale, or both depending on #cubes in the Vault Force column.
-        # TODO: Once power-up at a time, with queuing, and ignore extras from the same alliance.
-        for seesaw in self.seesaws:
-            seesaw.force(alliance)
+        self.vaults[alliance].force.play()
+
+    def levitate(self, alliance):
+        self.vaults[alliance].levitate.play()
 
     def boost(self, alliance):
-        # TODO: Switch, Scale, or both depending on #cubes in the Vault Boost column.
-        # TODO: Once power-up at a time, with queuing, and ignore extras from the same alliance.
-        for seesaw in self.seesaws:
-            seesaw.boost(alliance)
+        self.vaults[alliance].boost.play()
 
 
 if __name__ == "__main__":
