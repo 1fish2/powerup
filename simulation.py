@@ -60,6 +60,16 @@ GAIN_SWITCH_AUTO_POINTS = 2
 GAIN_SCALE_AUTO_POINTS = 2
 
 
+def plural(count, singular_form, plural_form):
+    """Returns singular_form for plural_form as befits count."""
+    return singular_form if count == 1 else plural_form
+
+
+def num_cubes(count):
+    """Returns '0 Cubes' or '1 Cube' or ..."""
+    return "{} {}".format(count, plural(count, 'Cube', 'Cubes'))
+
+
 class Color(str):
     """An alliance color value that allows a .opposite property."""
     pass
@@ -75,10 +85,12 @@ class Score(object):
 
     @classmethod
     def pick(cls, color, value):
+        # type: (Color, int) -> Score
         """Returns a Score where RED or BLUE or neither gets the given value."""
         return cls(value if color is RED else 0, value if color is BLUE else 0)
 
     def __init__(self, red, blue):
+        # type: (int, int) -> None
         """Returns a Score with the given red and blue point values."""
         self._red_points = red
         self._blue_points = blue
@@ -123,7 +135,10 @@ class Agent(object):
         pass
 
     def score(self):
-        """Returns the RED and BLUE points Score earned this time step."""
+        """
+        Returns the RED and BLUE points Score earned this time step.
+        Called exactly once per time step.
+        """
         return Score.ZERO
 
 
@@ -169,17 +184,25 @@ class Robot(Agent):
         self.alliance = alliance
         self.player = player
 
-        self.has_cube = False
+        self.cubes = 0
+
+    def __str__(self):
+        return "Robot({}{}) with {}".format(
+            self.alliance, self.player, num_cubes(self.cubes))
 
     def pickup(self):
         """Pick up a cube here."""
-        # TODO: Check if not self.has_cube? Check and decrement the number of cubes in this place.
-        self.has_cube = True
+        # TODO: Check and decrement the number of cubes in this place.
+        if self.cubes > 0:
+            raise RuntimeError("{} can't pick up another Cube".format(self))
+        self.cubes = 1
 
     def drop(self):
         """Drop a cube here."""
-        # TODO: Check if self.has_cube? Increment the number of cubes in this place.
-        self.has_cube = False
+        # TODO: Increment the number of cubes in this place.
+        if self.cubes < 1:
+            raise RuntimeError("{} can't drop a Cube".format(self))
+        self.cubes = 0
 
 
 class Scale(Agent):
@@ -199,6 +222,10 @@ class Scale(Agent):
         self.boost_timeout = 0
         self.boost_alliance = ''
         self.previous_owner = ''
+
+    def __str__(self):
+        return "{}(/{}) with {}".format(
+            self.__class__, self.front_color, num_cubes(self.cubes))
 
     def add_cube(self, side):
         """Add a cube to the front (0) or back (1) side of the Switch."""
@@ -241,7 +268,7 @@ class Scale(Agent):
         owner = self.owner()
         boosted = self.boosted and self.boost_alliance is owner
         value = 2 if self.autonomous or boosted else 1
-        if owner is not self.previous_owner:  # just established ownership
+        if owner is not self.previous_owner:  # established ownership this time step
             self.previous_owner = owner
             value *= 2
         return Score.pick(owner, value)
@@ -255,6 +282,11 @@ class Switch(Scale):
         """
         super(Switch, self).__init__(front_color)
         self.alliance_end = alliance_end
+
+    def __str__(self):
+        return "{}({}/{}) with {}".format(
+            self.__class__, self.alliance_end, self.front_color,
+            num_cubes(self.cubes))
 
     def force(self, alliance):
         """Start an alliance Force; no-op if this isn't the alliance's Switch."""
@@ -271,6 +303,69 @@ class Switch(Scale):
         return o if o is self.alliance_end else ''
 
 
+class VaultColumn(Agent):
+    def __init__(self, alliance, name):
+        """RED or BLUE alliance; name is Force, Levitate, or Boost."""
+        super(VaultColumn, self).__init__()
+        self.alliance = alliance
+        self.name = name
+
+        self._cubes = 0
+        self.previous_cubes = 0
+
+    @property
+    def cubes(self):
+        return self._cubes
+
+    def __str__(self):
+        return "VaultColumn({} {}) with {} Cubes".format(
+            self.alliance, self.name, self._cubes)
+
+    def add(self, cubes):
+        # type: (int) -> int
+        """Adds the given number of Cubes. Returns the new count."""
+        if cubes < 0:
+            raise RuntimeError("Can't remove {} cubes from {}".format(-cubes, self))
+        if self._cubes + cubes > 3:
+            raise RuntimeError("{} can't hold {} more cubes".format(self, cubes))
+        self._cubes += cubes
+        return self._cubes
+
+    def selects(self):
+        return ('', 'Switch', 'Scale', 'Switch Scale')[self._cubes]
+
+    def score(self):
+        score = Score.pick(self.alliance, 5 * (self._cubes - self.previous_cubes))
+        self.previous_cubes = self._cubes
+        return score
+
+
+class Vault(Agent):
+    """
+    An alliance's Vault for power-ups.
+    Example usage: vault.force.add(1), or maybe change it to vault['Force'].add(1).
+    """
+
+    def __init__(self, alliance):
+        super(Vault, self).__init__()
+        self.alliance = alliance
+        self.columns = tuple(VaultColumn(alliance, name)
+                             for name in ('Force', 'Levitate', 'Boost'))
+        self.force, self.levitate, self.boost = self.columns
+
+    def __str__(self):
+        cubes = [column.cubes for column in self.columns]
+        return "Vault({}) with {} Cubes".format(self.alliance, cubes)
+
+    def update(self, time):
+        super(Vault, self).update(time)
+        for column in self.columns:
+            column.update(time)
+
+    def score(self):
+        return sum((column.score() for column in self.columns), Score.ZERO)
+
+
 class PowerUpGame(Simulation):
     def __init__(self):
         super(PowerUpGame, self).__init__()
@@ -278,15 +373,18 @@ class PowerUpGame(Simulation):
         switch_front_color = RED
         scale_front_color = BLUE
 
-        self.score = Score.ZERO
+        self.robots = [Robot(alliance, player)
+                       for alliance in (RED, BLUE)
+                       for player in xrange(1, 4)]
+        self.seesaws = [Switch(RED, switch_front_color),
+                        Switch(BLUE, switch_front_color),
+                        Scale(scale_front_color)]
+        self.vaults = [Vault(RED), Vault(BLUE)]
 
-        self.robots = [Robot(alliance, player) for alliance in (RED, BLUE) for player in xrange(1, 4)]
-
-        self.seesaws = [Switch(alliance, switch_front_color) for alliance in (RED, BLUE)]
-        self.seesaws.append(Scale(scale_front_color))
-
-        for agent in chain(self.robots, self.seesaws):
+        for agent in chain(self.robots, self.seesaws, self.vaults):
             self.add(agent)
+
+        self.score = Score.ZERO
 
     def tick(self):
         """Advance time and update the running score."""
@@ -301,14 +399,14 @@ class PowerUpGame(Simulation):
         print "Final score: {}".format(self.score)
 
     def force(self, alliance):
-        # TODO: Switch, Scale, or both depending on #cubes.
-        # TODO: Once per type per alliance, with queuing.
+        # TODO: Switch, Scale, or both depending on #cubes in the Vault Force column.
+        # TODO: Once power-up at a time, with queuing, and ignore extras from the same alliance.
         for seesaw in self.seesaws:
             seesaw.force(alliance)
 
     def boost(self, alliance):
-        # TODO: Switch, Scale, or both depending on #cubes.
-        # TODO: Once per type per alliance, with queuing.
+        # TODO: Switch, Scale, or both depending on #cubes in the Vault Boost column.
+        # TODO: Once power-up at a time, with queuing, and ignore extras from the same alliance.
         for seesaw in self.seesaws:
             seesaw.boost(alliance)
 
