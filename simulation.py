@@ -46,6 +46,8 @@ Example robot actions: "scoring in switch", "getting cube from left portal",
 Maybe split this file into framework simulation.py, agents, and game.py.
 """
 
+from collections import namedtuple
+from enum import Enum  # PyPI enum34
 from itertools import chain
 
 AUTONOMOUS_SECS = 15
@@ -70,33 +72,30 @@ RED, BLUE = Color('red'), Color('blue')
 RED.opposite, BLUE.opposite = BLUE, RED
 
 
-class Score(object):
+# Robot locations. Cubes can also be in these locations and in Robots,
+# Switch plates, Scale plates, and Vault columns, but not *_PLATFORM_CLIMBED.
+Location = Enum(
+    'Location',
+    'RED_EXCHANGE_ZONE BLUE_EXCHANGE_ZONE '
+    'RED_FRONT_PORTAL RED_BACK_PORTAL BLUE_FRONT_PORTAL BLUE_BACK_PORTAL '
+    'RED_POWER_CUBE_ZONE BLUE_POWER_CUBE_ZONE '
+    'RED_SWITCH_FENCE BLUE_SWITCH_FENCE '
+    'RED_OUTER_ZONE BLUE_OUTER_ZONE '  # outside the auto-line
+    'RED_INNER_ZONE BLUE_INNER_ZONE '  # inside the auto-line
+    'RED_PLATFORM BLUE_PLATFORM RED_PLATFORM_CLIMBED BLUE_PLATFORM_CLIMBED '
+    'FRONT_NULL_TERRITORY BACK_NULL_TERRITORY ')
+
+for loc in Location:
+    loc.cubes = 0  # The number of cubes in this Location.
+
+
+class Score(namedtuple('Score', 'red blue')):
     """An incremental or final match score."""
 
     @classmethod
     def pick(cls, color, value):
-        # type: (Color, int) -> Score
         """Returns a Score where RED or BLUE or neither gets the given value."""
         return cls(value if color is RED else 0, value if color is BLUE else 0)
-
-    def __init__(self, red, blue):
-        # type: (int, int) -> None
-        """Returns a Score with the given red and blue point values."""
-        self._red_points = red
-        self._blue_points = blue
-
-    @property
-    def red(self):
-        """Returns red's points."""
-        return self._red_points
-
-    @property
-    def blue(self):
-        """Returns blue's points."""
-        return self._blue_points
-
-    def __repr__(self):
-        return 'Score(red={}, blue={})'.format(self.red, self.blue)
 
     def __add__(self, other):
         """Adds two Score values. Useful with sum([scores...], Score.ZERO)."""
@@ -165,34 +164,42 @@ class Simulation(object):
 
 
 class Robot(Agent):
-    def __init__(self, alliance, player):
+    def __init__(self, alliance, player, location=None):
         """
         :param alliance: RED or BLUE
         :param player: 1, 2, or 3
+        :param location: a Location (defaults to the alliance's outer zone)
         """
         super(Robot, self).__init__()
         self.alliance = alliance
         self.player = player
 
+        if location is None:
+            location = Location.RED_OUTER_ZONE if alliance is RED else Location.BLUE_OUTER_ZONE
+        self.location = location
         self.cubes = 0
 
     def __str__(self):
-        return "Robot({}{}) with {} Cube(s)".format(
-            self.alliance, self.player, self.cubes)
+        return "Robot({}{}) in {} with {} Cube(s)".format(
+            self.alliance, self.player, self.location, self.cubes)
 
     def pickup(self):
-        """Pick up a cube here."""
-        # TODO: Check and decrement the number of cubes in this place.
-        if self.cubes > 0:
-            raise RuntimeError("{} can't pick up another Cube".format(self))
-        self.cubes = 1
+        """If there's a Cube here and room in the Robot, pick it up and return True."""
+        if self.location.cubes > 0 and self.cubes == 0:
+            self.location.cubes -= 1
+            self.cubes += 1
+            return True
+        return False
 
     def drop(self):
-        """Drop a cube here."""
-        # TODO: Increment the number of cubes in this place.
-        if self.cubes < 1:
-            raise RuntimeError("{} can't drop a Cube".format(self))
-        self.cubes = 0
+        """If the Robot has a Cube, drop it here and return True."""
+        if self.cubes > 0:
+            self.location.cubes += 1
+            self.cubes -= 1
+            return True
+        return False
+
+    # TODO: Methods to put Cubes on Switch/Scale plates, etc.
 
 
 class Scale(Agent):
@@ -410,7 +417,7 @@ class PowerUpGame(Simulation):
         for t in xrange(GAME_SECS):
             self.tick()
             # TODO: Output a CSV row of score and state data.
-        print "Final score: {}".format(self.score)
+        print "*** Final score: {} ***".format(self.score)
 
     def force(self, alliance):
         self.vaults[alliance].force.play()
