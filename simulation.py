@@ -5,28 +5,6 @@ FRC PowerUp game score simulation.
 
 TODO: Robot behaviors, driver behaviors, queued power-ups;
 More scoring: auto-run reach the line, parked, climbed, ...;
-Robot locations:
-    Exchange zone {red, blue}
-    Portal {red, blue} x {front, back} -- Scoring Table is at the back side
-    Power Cube zone {red, blue}
-    Switch fence {red, blue}
-    outer zone {red, blue} outside the auto-line
-    inner zone {red, blue} inside the auto-line
-    Platform zone {red, blue} (climbed, parked, or not)
-    Null Territory {front, back}
-Cube locations:
-    Exchange zone {red, blue}
-    Portal {red, blue} x {front, back}
-    Power Cube zone {red, blue}
-    Switch fence {red, blue}
-    outer zone {red, blue} outside the auto-line (excluding the Power Cube zones)
-    inner zone {red, blue} inside the auto-line (excluding the Power Cube zones)
-    Platform zone {red, blue} (excluding the Switch fences)
-    Null Territory {front, back}
-    Switch plate {red, blue} x {front, back}
-    Scale plate {front, back}
-    Vault {red, blue} x {force, levitate, boost}
-    in a Robot {red 1 - 3, blue 1 - 3}
 Power-ups {red, blue} x {force, levitate, boost} {unused, queued, played};
 Portals;
 Ranking points: 2 for win, 1 for tie, +1 for 3-robot climb, +1 for auto-quest
@@ -74,19 +52,22 @@ RED.opposite, BLUE.opposite = BLUE, RED
 
 # Robot locations. Cubes can also be in these locations and in Robots,
 # Switch plates, Scale plates, and Vault columns, but not *_PLATFORM_CLIMBED.
+# The Scoring Table is at the "back side."
+# An "outer zone" is between the alliance wall and the auto-line.
 Location = Enum(
     'Location',
     'RED_EXCHANGE_ZONE BLUE_EXCHANGE_ZONE '
     'RED_FRONT_PORTAL RED_BACK_PORTAL BLUE_FRONT_PORTAL BLUE_BACK_PORTAL '
     'RED_POWER_CUBE_ZONE BLUE_POWER_CUBE_ZONE '
     'RED_SWITCH_FENCE BLUE_SWITCH_FENCE '
-    'RED_OUTER_ZONE BLUE_OUTER_ZONE '  # outside the auto-line
-    'RED_INNER_ZONE BLUE_INNER_ZONE '  # inside the auto-line
+    'RED_OUTER_ZONE BLUE_OUTER_ZONE '
+    'RED_FRONT_INNER_ZONE RED_BACK_INNER_ZONE BLUE_FRONT_INNER_ZONE  BLUE_BACK_INNER_ZONE '
     'RED_PLATFORM BLUE_PLATFORM RED_PLATFORM_CLIMBED BLUE_PLATFORM_CLIMBED '
     'FRONT_NULL_TERRITORY BACK_NULL_TERRITORY ')
 
 for loc in Location:
     loc.cubes = 0  # The number of cubes in this Location.
+    loc.adjacent_plate = None  # Adjacent seesaw Plate to place Cubes.
 
 
 class Score(namedtuple('Score', 'red blue')):
@@ -125,7 +106,7 @@ class Agent(object):
 
     def score(self):
         """
-        Returns the RED and BLUE points Score earned this time step.
+        Returns the Score(red_points, blue_points) earned this time step.
         Called exactly once per time step.
         """
         return Score.ZERO
@@ -192,14 +173,36 @@ class Robot(Agent):
         return False
 
     def drop(self):
-        """If the Robot has a Cube, drop it here and return True."""
+        """
+        If the Robot has a Cube, drop it here and return True. In an Exchange zone
+        or Portal zone, this puts the Cube in the Exchange or Portal. Next to a
+        seesaw Plate, this drops a Cube on the ground; call place() to place the
+        Cube on the Plate.
+        """
         if self.cubes > 0:
             self.location.cubes += 1
             self.cubes -= 1
             return True
         return False
 
-    # TODO: Methods to put Cubes on Switch/Scale plates, etc.
+    def place(self):
+        """If possible, place a Cube from the Robot on the adjacent Plate and return True."""
+        plate = self.location.adjacent_plate
+        if plate is not None and self.cubes > 0:
+            plate.cubes += 1
+            self.cubes -= 1
+            return True
+        return False
+
+
+class Plate(Agent):
+    """A Plate holding Cubes on one side of a Scale or Switch (a "seesaw")."""
+    def __init__(self, seesaw, is_front):
+        super(Plate, self).__init__()
+        self.seesaw = seesaw
+        self.is_front = is_front
+
+        self.cubes = 0
 
 
 class Scale(Agent):
@@ -209,9 +212,11 @@ class Scale(Agent):
         :param front_color: RED or BLUE, selected by the FMS
         """
         super(Scale, self).__init__()
+        self.alliance_end = ''
         self.front_color = front_color
+        self.front_plate = Plate(self, True)
+        self.back_plate = Plate(self, False)
 
-        self.cubes = [0, 0]  # [front, back] side cube counts
         self.forced = False
         self.force_timeout = 0
         self.force_alliance = ''
@@ -220,13 +225,21 @@ class Scale(Agent):
         self.boost_alliance = ''
         self.previous_owner = ''
 
-    def __str__(self):
-        return "{}(/{}) with {} Cube(s)".format(
-            self.__class__, self.front_color, self.cubes)
+        self._setup_locations()
 
-    def add_cube(self, side):
-        """Add a cube to the front (0) or back (1) side of the Switch."""
-        self.cubes[side] += 1
+    def _setup_locations(self):
+        """Set the adjacent Locations to point to the Plates."""
+        Location.FRONT_NULL_TERRITORY.adjacent_plate = self.front_plate
+        Location.BACK_NULL_TERRITORY.adjacent_plate = self.back_plate
+
+    def __str__(self):
+        return "{}({}/{}) with {} Cube(s)".format(
+            self.__class__, self.alliance_end, self.front_color, self.cubes)
+
+    @property
+    def cubes(self):
+        """Returns (# front Plate Cubes, # back Plate Cubes)."""
+        return self.front_plate.cubes, self.back_plate.cubes
 
     def force(self, alliance):
         """
@@ -252,6 +265,9 @@ class Scale(Agent):
 
     def update(self, time):
         super(Scale, self).update(time)
+        self.front_plate.update(time)
+        self.back_plate.update(time)
+
         if self.forced and time >= self.force_timeout:
             self.forced = False
             self.force_alliance = ''
@@ -260,10 +276,15 @@ class Scale(Agent):
             self.boost_alliance = ''
 
     def owner(self):
-        """Returns which alliance currently "owns" this Scale: RED, '', or BLUE."""
+        """
+        Returns which alliance currently "owns" this Scale: RED, '', or BLUE.
+
+        ASSUMES: Only the number of Cubes on each Plate determines the tilt;
+        this simulation does not model the lever distance of each Cube.
+        """
         if self.forced:
             return self.force_alliance
-        tilt = self.cubes[0].__cmp__(self.cubes[1])  # <, ==, > :: -1, 0, 1
+        tilt = self.front_plate.cubes.__cmp__(self.back_plate.cubes)  # <, ==, > :: -1, 0, 1
         return (self.front_color.opposite, '', self.front_color)[tilt + 1]
 
     def score(self):
@@ -278,6 +299,7 @@ class Scale(Agent):
 
 
 class Switch(Scale):
+    """A Switch."""
     def __init__(self, alliance_end, front_color):
         """
         :param alliance_end: RED or BLUE end of the field
@@ -286,9 +308,14 @@ class Switch(Scale):
         super(Switch, self).__init__(front_color)
         self.alliance_end = alliance_end
 
-    def __str__(self):
-        return "{}({}/{}) with {} Cube(s)".format(
-            self.__class__, self.alliance_end, self.front_color, self.cubes)
+    def _setup_locations(self):
+        """Set up the adjacent Locations to point to the Plates."""
+        if self.alliance_end is RED:
+            Location.RED_FRONT_INNER_ZONE.adjacent_plate = self.front_plate
+            Location.RED_BACK_INNER_ZONE.adjacent_plate = self.back_plate
+        else:
+            Location.BLUE_FRONT_INNER_ZONE.adjacent_plate = self.front_plate
+            Location.BLUE_BACK_INNER_ZONE.adjacent_plate = self.back_plate
 
     def force(self, alliance):
         """Start an alliance Force; no-op if this isn't the alliance's Switch."""
@@ -389,12 +416,16 @@ class PowerUpGame(Simulation):
     def __init__(self):
         super(PowerUpGame, self).__init__()
         # TODO: An initial-conditions vector for the FMS choices.
+        # TODO: Red and Blue alliance gameplay decision objects.
         switch_front_color = RED
         scale_front_color = BLUE
 
         self.robots = [Robot(alliance, player)
                        for alliance in (RED, BLUE)
                        for player in xrange(1, 4)]
+        for robot in self.robots:
+            robot.cubes = 1  # TODO: gameplay choices
+
         red_switch = Switch(RED, switch_front_color)
         blue_switch = Switch(BLUE, switch_front_color)
         scale = Scale(scale_front_color)
@@ -407,6 +438,23 @@ class PowerUpGame(Simulation):
 
         self.score = Score.ZERO
 
+        self._place_cubes()
+
+    def _initial_portal_cubes(self, alliance):
+        """Returns (# front portal cubes, # back portal cubes) for the given Alliance."""
+        cubes_in_robots = sum(robot.cubes for robot in self.robots if robot.alliance is alliance)
+        total_portal_cubes = 7 * 2 - cubes_in_robots
+        front_portal_cubes = total_portal_cubes // 2
+        return front_portal_cubes, (total_portal_cubes - front_portal_cubes)
+
+    def _place_cubes(self):
+        Location.RED_FRONT_PORTAL.cubes, Location.RED_BACK_PORTAL.cubes \
+            = self._initial_portal_cubes(RED)
+        Location.BLUE_FRONT_PORTAL.cubes, Location.BLUE_BACK_PORTAL.cubes \
+            = self._initial_portal_cubes(BLUE)
+        Location.RED_SWITCH_FENCE.cubes = Location.BLUE_SWITCH_FENCE.cubes = 6
+        Location.RED_POWER_CUBE_ZONE.cubes = Location.BLUE_POWER_CUBE_ZONE.cubes = 10
+
     def tick(self):
         """Advance time and update the running score."""
         super(PowerUpGame, self).tick()
@@ -418,6 +466,7 @@ class PowerUpGame(Simulation):
             self.tick()
             # TODO: Output a CSV row of score and state data.
         print "*** Final score: {} ***".format(self.score)
+        print
 
     def force(self, alliance):
         self.vaults[alliance].force.play()
