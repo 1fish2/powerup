@@ -41,13 +41,14 @@ GAIN_SCALE_AUTO_POINTS = 2
 
 
 class Color(str):
-    """An alliance color value that allows a .opposite property."""
+    """An alliance color name that supports a .opposite property."""
     pass
 
 
 # Singleton alliance Color objects.
 RED, BLUE = Color('RED'), Color('BLUE')
 RED.opposite, BLUE.opposite = BLUE, RED
+ALLIANCES = (RED, BLUE)
 
 
 # Robot locations. Cubes can also be in these locations and in Robots,
@@ -83,44 +84,30 @@ def _init_travel_times():
     jump to the destination after this many seconds. Take longer routes in a
     sequence of direct paths via intermediate Locations *OUTER_ZONE,
     *INNER_ZONE, *SWITCH_FENCE, *PLATFORM, *NULL_TERRITORY.
-
-    # TODO: Do this via loops over Location['RED_OUTER_ZONE'] et al?
     """
-    def set_pair(location1, location2, time):
-        TRAVEL_TIMES[(location1, location2)] \
-            = TRAVEL_TIMES[(location2, location1)] = time
+    def set_pairs(location_name1, location_name2, time):
+        """Set RED and BLUE forward and reverse travel times."""
+        for alliance in ALLIANCES:
+            location1 = Location[location_name1.replace(RED, alliance)]
+            location2 = Location[location_name2.replace(RED, alliance)]
+            TRAVEL_TIMES[(location1, location2)] \
+                = TRAVEL_TIMES[(location2, location1)] = time
 
-    set_pair(Location.RED_OUTER_ZONE, Location.RED_EXCHANGE_ZONE, 2)
-    set_pair(Location.RED_OUTER_ZONE, Location.RED_FRONT_PORTAL, 5)
-    set_pair(Location.RED_OUTER_ZONE, Location.RED_BACK_PORTAL, 5)
-    set_pair(Location.RED_OUTER_ZONE, Location.RED_POWER_CUBE_ZONE, 2)
-    set_pair(Location.RED_OUTER_ZONE, Location.RED_FRONT_INNER_ZONE, 6)
-    set_pair(Location.RED_OUTER_ZONE, Location.RED_BACK_INNER_ZONE, 6)
+    set_pairs('RED_OUTER_ZONE', 'RED_EXCHANGE_ZONE', 2)
+    set_pairs('RED_OUTER_ZONE', 'RED_FRONT_PORTAL', 5)
+    set_pairs('RED_OUTER_ZONE', 'RED_BACK_PORTAL', 5)
+    set_pairs('RED_OUTER_ZONE', 'RED_POWER_CUBE_ZONE', 2)
+    set_pairs('RED_OUTER_ZONE', 'RED_FRONT_INNER_ZONE', 6)
+    set_pairs('RED_OUTER_ZONE', 'RED_BACK_INNER_ZONE', 6)
 
-    set_pair(Location.RED_FRONT_INNER_ZONE, Location.RED_SWITCH_FENCE, 4)
-    set_pair(Location.RED_BACK_INNER_ZONE, Location.RED_SWITCH_FENCE, 4)
-    set_pair(Location.RED_FRONT_INNER_ZONE, Location.RED_PLATFORM, 4)
-    set_pair(Location.RED_BACK_INNER_ZONE, Location.RED_PLATFORM, 4)
-    set_pair(Location.RED_SWITCH_FENCE, Location.RED_PLATFORM, 2)
+    set_pairs('RED_SWITCH_FENCE', 'RED_FRONT_INNER_ZONE', 4)
+    set_pairs('RED_SWITCH_FENCE', 'RED_BACK_INNER_ZONE', 4)
+    set_pairs('RED_SWITCH_FENCE', 'RED_PLATFORM', 2)
+    set_pairs('RED_PLATFORM', 'RED_FRONT_INNER_ZONE', 4)
+    set_pairs('RED_PLATFORM', 'RED_BACK_INNER_ZONE', 4)
 
-    set_pair(Location.RED_FRONT_INNER_ZONE, Location.FRONT_NULL_TERRITORY, 6)
-    set_pair(Location.RED_BACK_INNER_ZONE, Location.BACK_NULL_TERRITORY, 6)
-
-    set_pair(Location.BLUE_OUTER_ZONE, Location.BLUE_EXCHANGE_ZONE, 2)
-    set_pair(Location.BLUE_OUTER_ZONE, Location.BLUE_FRONT_PORTAL, 5)
-    set_pair(Location.BLUE_OUTER_ZONE, Location.BLUE_BACK_PORTAL, 5)
-    set_pair(Location.BLUE_OUTER_ZONE, Location.BLUE_POWER_CUBE_ZONE, 2)
-    set_pair(Location.BLUE_OUTER_ZONE, Location.BLUE_FRONT_INNER_ZONE, 6)
-    set_pair(Location.BLUE_OUTER_ZONE, Location.BLUE_BACK_INNER_ZONE, 6)
-
-    set_pair(Location.BLUE_FRONT_INNER_ZONE, Location.BLUE_SWITCH_FENCE, 4)
-    set_pair(Location.BLUE_BACK_INNER_ZONE, Location.BLUE_SWITCH_FENCE, 4)
-    set_pair(Location.BLUE_FRONT_INNER_ZONE, Location.BLUE_PLATFORM, 4)
-    set_pair(Location.BLUE_BACK_INNER_ZONE, Location.BLUE_PLATFORM, 4)
-    set_pair(Location.BLUE_SWITCH_FENCE, Location.BLUE_PLATFORM, 2)
-
-    set_pair(Location.BLUE_FRONT_INNER_ZONE, Location.FRONT_NULL_TERRITORY, 6)
-    set_pair(Location.BLUE_BACK_INNER_ZONE, Location.BACK_NULL_TERRITORY, 6)
+    set_pairs('RED_FRONT_INNER_ZONE', 'FRONT_NULL_TERRITORY', 6)
+    set_pairs('RED_BACK_INNER_ZONE', 'BACK_NULL_TERRITORY', 6)
 
 
 _init_travel_times()
@@ -536,7 +523,7 @@ class PowerUpGame(Simulation):
 
         # Create and add all the game objects.
         self.robots = [Robot(alliance, player)
-                       for alliance in (RED, BLUE)
+                       for alliance in ALLIANCES
                        for player in xrange(1, 4)]
 
         red_switch = Switch(RED, switch_front_color)
@@ -554,7 +541,7 @@ class PowerUpGame(Simulation):
 
         # Create the player decision objects.
         self.robot_players = [RobotPlayer(robot) for robot in self.robots]
-        self.human_players = [HumanPlayer(alliance) for alliance in (RED, BLUE)]
+        self.human_players = [HumanPlayer(alliance) for alliance in ALLIANCES]
 
         # Place the remaining Cubes on the field now that RobotPlayers preloaded some.
         self._place_cubes()
