@@ -65,7 +65,7 @@ Location = Enum(
 for loc in Location:
     loc.is_inner_zone = loc.name.endswith('_INNER_ZONE')
     loc.cubes = 0  # The number of cubes in this Location.
-    loc.adjacent_plate = None  # Adjacent seesaw Plate to place Cubes.
+    loc.adjacent_plate = None  # Adjacent seesaw Plate; set in seesaw __init__().
 
 ScoreFactor = Enum('ScoreFactor', 'NOT_YET ACHIEVED COUNTED')
 
@@ -545,24 +545,37 @@ class HumanPlayer(object):
     # TODO: A generator to yield human player actions as the game proceeds.
 
 
+def _fms_choices():
+    """
+    Return the FMS's start-of-match choices: (switch_front_color, scale_front_color).
+
+    NOTE: Teams should not see this info when placing Robots on the field.
+    At match start, RobotPlayers can read game.scale.front_color,
+    game.red_switch.front_color, game.switches[RED].front_color, etc.
+    """
+    # This could be random or else set how you want a simulation run to start.
+    return BLUE, RED
+
+
 class PowerUpGame(Simulation):
     def __init__(self):
         super(PowerUpGame, self).__init__()
-        # TODO: An initial-conditions vector for the FMS choices.
-        switch_front_color = RED
-        scale_front_color = BLUE
+
+        switch_front_color, scale_front_color = _fms_choices()
 
         # Create and add all the game objects.
         self.robots = [Robot(alliance, player)
                        for alliance in ALLIANCES
                        for player in xrange(1, 4)]
 
-        red_switch = Switch(RED, switch_front_color)
-        blue_switch = Switch(BLUE, switch_front_color)
-        scale = Scale(scale_front_color)
-        self.seesaws = [red_switch, blue_switch, scale]
-        self.vaults = {RED: Vault(RED, red_switch, scale),
-                       BLUE: Vault(BLUE, blue_switch, scale)}
+        self.red_switch = Switch(RED, switch_front_color)
+        self.blue_switch = Switch(BLUE, switch_front_color)
+        self.scale = Scale(scale_front_color)
+        self.switches = {RED: self.red_switch, BLUE: self.blue_switch}
+        self.seesaws = [self.red_switch, self.blue_switch, self.scale]
+
+        self.vaults = {RED: Vault(RED, self.red_switch, self.scale),
+                       BLUE: Vault(BLUE, self.blue_switch, self.scale)}
 
         for agent in chain(self.robots, self.seesaws, self.vaults.itervalues()):
             self.add(agent)
@@ -570,7 +583,8 @@ class PowerUpGame(Simulation):
         # Start keeping score.
         self.score = Score.ZERO
 
-        # Create the player decision objects.
+        # Create the player decision objects. They can now look at the
+        # Switch/Scale front colors.
         self.robot_players = [RobotPlayer(robot) for robot in self.robots]
         self.human_players = [HumanPlayer(alliance) for alliance in ALLIANCES]
 
