@@ -1,3 +1,6 @@
+# Output files
+*.csv
+
 # Compiled source
 *.pyc
 

@@ -3,28 +3,22 @@
 """
 FRC PowerUp game score simulation.
 
-TODO: Robot behaviors, driver behaviors, queued power-ups;
-More scoring: auto-run reach the line, parked, climbed, ...;
+TODO: More Robot and human player behaviors, queued power-ups;
+More scoring: parked/climbed, ...;
 Power-ups {red, blue} x {force, levitate, boost} {unused, queued, played};
 Portals;
 Ranking points: 2 for win, 1 for tie, +1 for 3-robot climb, +1 for auto-quest
 (3 auto-runs AND own your switch).
-Enforce various rules, e.g. at least 5 cubes in each portal at start-of-match.
-
-TODO: Output one CSV row per time step:
-    Time
-    Scores
-    Switch and Scale ownership, #cubes, TODO: also forced and boosted state?
-    Robots: location, #cubes [0 .. 1], {climbed, parked, not}, current action
-    Other cube locations
+Enforce more rules, e.g. at least 5 cubes in each portal at start-of-match.
 
 Example robot actions: "scoring in switch", "getting cube from left portal",
 "going to climb", "climbing".
 
-Maybe split this file into framework simulation.py, agents, and game.py.
+Split this file into framework simulation.py, agents, and game.py.
 """
 
 from collections import namedtuple
+import csv
 from enum import Enum  # PyPI enum34
 from itertools import chain
 
@@ -81,7 +75,7 @@ TRAVEL_TIMES = dict()  # map from (location1, location2) -> Robot travel time in
 def _init_travel_times():
     """
     Initialize travel times for direct paths. In this simulation, a Robot will
-    jump to the destination after this many seconds. Take longer routes in a
+    jump to the destination after this many seconds. Drive longer routes as a
     sequence of direct paths via intermediate Locations *OUTER_ZONE,
     *INNER_ZONE, *SWITCH_FENCE, *PLATFORM, *NULL_TERRITORY.
     """
@@ -111,6 +105,10 @@ def _init_travel_times():
 
 
 _init_travel_times()
+
+
+def typename(value):
+    return type(value).__name__
 
 
 class Score(namedtuple('Score', 'red blue')):
@@ -153,6 +151,14 @@ class Agent(object):
         Called exactly once per time step.
         """
         return Score.ZERO
+
+    def csv_header(self):
+        """Return a list of 0 or more CSV header column name strings."""
+        return []
+
+    def csv_row(self):
+        """Return a list of 0 or more CSV values corresponding to csv_header()."""
+        return []
 
 
 class GameOver(Exception):
@@ -208,10 +214,21 @@ class Robot(Agent):
         self.cubes = 0
         self.auto_run = ScoreFactor.NOT_YET
 
+    @property
+    def name(self):
+        return "Robot({}{})".format(self.alliance, self.player)
+
     def __str__(self):
         # TODO: Include the current action and destination.
-        return "Robot({}{}) in {} with {} Cube(s)".format(
-            self.alliance, self.player, self.location, self.cubes)
+        return "{} in {} with {} Cube(s)".format(self.name, self.location, self.cubes)
+
+    def csv_header(self):
+        name = self.name
+        # TODO: Add the current robot action, destination, climbed/parked.
+        return [name + ' Location', name + ' Cubes']
+
+    def csv_row(self):
+        return [self.location.name, self.cubes]
 
     def update(self, time):
         super(Robot, self).update(time)
@@ -278,7 +295,7 @@ class Plate(object):
         self.cubes = 0
 
     def __str__(self):
-        return "{} {} with {} Cubes".format(self.name, type(self), self.cubes)
+        return "{} {} with {} Cubes".format(self.name, typename(self), self.cubes)
 
 
 class Scale(Agent):
@@ -304,16 +321,29 @@ class Scale(Agent):
         self._setup_locations()
 
     def _plate_name(self, front_back):
-        return "{} Scale".format(front_back)
+        """Return a string like 'Front Scale' to make 'Front Scale Plate'."""
+        return "{} {}".format(front_back, typename(self))
 
     def _setup_locations(self):
         """Set the adjacent Locations to point to the Plates."""
         Location.FRONT_NULL_TERRITORY.adjacent_plate = self.front_plate
         Location.BACK_NULL_TERRITORY.adjacent_plate = self.back_plate
 
+    @property
+    def name(self):
+        return "{}({}/{})".format(
+            typename(self), self.alliance_end, self.front_color)
+
     def __str__(self):
-        return "{}({}/{}) with {} Cube(s)".format(
-            type(self), self.alliance_end, self.front_color, self.cubes)
+        return "{} with {} Cube(s)".format(self.name, self.cubes)
+
+    def csv_header(self):
+        # TODO: Add forced and boosted state.
+        name = self.name
+        return [name + ' Owner', name + ' Cubes']
+
+    def csv_row(self):
+        return [self.owner(), self.cubes]
 
     @property
     def cubes(self):
@@ -386,7 +416,8 @@ class Switch(Scale):
         self.alliance_end = alliance_end
 
     def _plate_name(self, front_back):
-        return "{} {} Switch".format(front_back, self.alliance_end)
+        """Return a string like 'Front RED Switch' to make 'Front RED Switch Plate'."""
+        return "{} {} {}".format(front_back, self.alliance_end, typename(self))
 
     def _setup_locations(self):
         """Set up the adjacent Locations to point to the Plates."""
@@ -566,11 +597,26 @@ class PowerUpGame(Simulation):
         super(PowerUpGame, self).tick()
         self.score = sum((agent.score() for agent in self.agents), self.score)
 
-    def play(self):
+    def csv_header(self):
+        """Return a list of 0 or more CSV header column name strings."""
+        return ['Time', 'Score']
+
+    def csv_row(self):
+        """Return a list of 0 or more CSV values corresponding to csv_header()."""
+        return [self.time, self.score]
+
+    def play(self, csv_writer):
         """Play out the simulated game."""
+        # TODO: Include # Cubes at each Location in the CSV output?
+        csv_contributors = [self] + self.agents
+        header = sum((c.csv_header() for c in csv_contributors), [])
+        csv_writer.writerow(header)
+
         for t in xrange(GAME_SECS):
             self.tick()
-            # TODO: Output a CSV row of score and state data.
+            row = sum((c.csv_row() for c in csv_contributors), [])
+            csv_writer.writerow(row)
+
         print "*** Final score: {} ***".format(self.score)
         print
 
@@ -585,5 +631,7 @@ class PowerUpGame(Simulation):
 
 
 if __name__ == "__main__":
-    game = PowerUpGame()
-    game.play()
+    with open('powerup-output.csv', 'wb') as f:
+        writer = csv.writer(f)
+        game = PowerUpGame()
+        game.play(writer)
