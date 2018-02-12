@@ -323,10 +323,8 @@ class Scale(Agent):
         self.front_plate = Plate(self._plate_name("Front"))
         self.back_plate = Plate(self._plate_name("Back"))
 
-        self.forced = False
-        self.force_alliance = ''
-        self.boosted = False
-        self.boost_alliance = ''
+        self.forced, self.force_alliance = False, ''
+        self.boosted, self.boost_alliance = False, ''
         self.previous_owner = ''
 
         self._setup_locations()
@@ -363,25 +361,34 @@ class Scale(Agent):
 
     def force(self, alliance):
         """
-        Start an alliance Force power-up.
+        Start an alliance Force power-up, cancelling any previous Force or Boost.
         NOTE: VaultColumn.play() relies on this method selector name and signature.
+        NOTE: This could queue a second Force/Boost operation but that needs to
+        work across all Switches and Scales.
         """
         def finish():
+            self.forced, self.force_alliance = False, ''
+
         if self.autonomous:
             raise RuntimeError("Can't Force during autonomous")
-        self.forced = True
-        self.force_alliance = alliance
+        self.forced, self.force_alliance = True, alliance
+        self.boosted, self.boost_alliance = False, ''
+        self.schedule_action(FORCE_SECS, finish, 'force')
 
     def boost(self, alliance):
         """
-        Start an alliance Boost power-up.
+        Start an alliance Boost power-up, cancelling any previous Force or Boost.
         NOTE: VaultColumn.play() relies on this method selector name and signature.
+        NOTE: This could queue a second Force/Boost operation but that needs to
+        work across all Switches and Scales.
         """
+        def finish():
+            self.boosted, self.boost_alliance = False, ''
 
         if self.autonomous:
             raise RuntimeError("Can't Boost during autonomous")
-        self.boosted = True
-        self.boost_alliance = alliance
+        self.boosted, self.boost_alliance = True, alliance
+        self.forced, self.force_alliance = False, ''
         self.schedule_action(BOOST_SECS, finish, 'boost')
 
     def owner(self):
