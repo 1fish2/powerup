@@ -1,1 +1,5 @@
+# Packages required with Python 2.7.14.
+# Run `pip install -r requirements.txt` to install the packages,
+# preferably in a Python virtual environment (pyenv).
+
 enum34==1.1.6
