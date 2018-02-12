@@ -133,17 +133,26 @@ class Agent(object):
     def __init__(self):
         self.simulation = None
 
+        self.eta = None  # when to perform scheduled_action
+        self.scheduled_action = None  # a callable to perform at ETA
+        self.scheduled_action_description = ''  # typically a method name
+
     @property
     def time(self):
         return self.simulation.time
 
     @property
     def autonomous(self):
+        """Return True during the autonomous period."""
         return self.simulation.autonomous
 
     def update(self, time):
         """Called once per time step to update this Agent."""
-        pass
+        if self.time == self.eta:
+            self.eta = None
+            self.scheduled_action()
+            self.scheduled_action = None
+            self.scheduled_action_description = ''
 
     def score(self):
         """
@@ -159,6 +168,15 @@ class Agent(object):
     def csv_row(self):
         """Return a list of 0 or more CSV values corresponding to csv_header()."""
         return []
+
+    def schedule_action(self, seconds, action, description):
+        """
+        Schedule a callable action to perform seconds from now, replacing any
+        current scheduled action.
+        """
+        self.eta = self.time + seconds
+        self.scheduled_action = action
+        self.scheduled_action_description = description
 
 
 class GameOver(Exception):
@@ -209,8 +227,7 @@ class Robot(Agent):
 
         if location is None:
             location = Location.RED_OUTER_ZONE if alliance is RED else Location.BLUE_OUTER_ZONE
-        self.destination = self.location = location
-        self.eta = None  # => not driving
+        self.location = location
         self.cubes = 0
         self.auto_run = ScoreFactor.NOT_YET
 
@@ -224,21 +241,11 @@ class Robot(Agent):
 
     def csv_header(self):
         name = self.name
-        # TODO: Add the current robot action, destination, climbed/parked.
-        return [name + ' Location', name + ' Cubes']
+        # TODO: Add climbed/parked.
+        return [name + ' Location', name + ' Cubes', name + ' action']
 
     def csv_row(self):
-        return [self.location.name, self.cubes]
-
-    def update(self, time):
-        super(Robot, self).update(time)
-        if self.time == self.eta:
-            self.location = self.destination
-            self.eta = None
-
-            if (self.auto_run is ScoreFactor.NOT_YET and self.autonomous
-                    and self.location.is_inner_zone):
-                self.auto_run = ScoreFactor.ACHIEVED
+        return [self.location.name, self.cubes, str(self.scheduled_action_description)]
 
     def score(self):
         if self.auto_run is ScoreFactor.ACHIEVED:
@@ -249,43 +256,49 @@ class Robot(Agent):
         # TODO: Add Parking or Climbing points.
         return points
 
-    def head_to(self, destination):
+    def drive_to(self, destination):
         """
-        Begin driving to the given destination. Cancel any current destination.
+        Begin driving to the given destination, replacing any current action.
         Does no path planning -- raises KeyError if destination is not adjacent.
         """
-        self.destination = destination
-        self.eta = self.time + TRAVEL_TIMES[(self.location, destination)]
+        def arrive():
+            self.location = destination
+            if (self.auto_run is ScoreFactor.NOT_YET
+                    and destination.is_inner_zone and self.autonomous):
+                self.auto_run = ScoreFactor.ACHIEVED
+
+        travel_time = TRAVEL_TIMES[(self.location, destination)]
+        self.schedule_action(travel_time, arrive, ('drive_to', destination.name))
 
     def pickup(self):
-        """If there's a Cube here and room in the Robot, pick it up and return True."""
-        if self.location.cubes > 0 and self.cubes == 0:
-            self.location.cubes -= 1
-            self.cubes += 1
-            return True
-        return False
+        """If there's a Cube here and room in the Robot, pick it up."""
+        def finish():
+            if self.location.cubes > 0 and self.cubes == 0:
+                self.location.cubes -= 1
+                self.cubes += 1
+        self.schedule_action(1, finish, 'pickup')
 
     def drop(self):
         """
-        If the Robot has a Cube, drop it here and return True. In an Exchange zone
+        If the Robot has a Cube, drop it here. In an Exchange zone
         or Portal zone, this puts the Cube in the Exchange or Portal. Next to a
         seesaw Plate, this drops a Cube on the ground; call place() to place the
         Cube on the Plate.
         """
-        if self.cubes > 0:
-            self.location.cubes += 1
-            self.cubes -= 1
-            return True
-        return False
+        def finish():
+            if self.cubes > 0:
+                self.location.cubes += 1
+                self.cubes -= 1
+        self.schedule_action(1, finish, 'drop')
 
     def place(self):
-        """If possible, place a Cube from the Robot on the adjacent Plate and return True."""
-        plate = self.location.adjacent_plate
-        if plate is not None and self.cubes > 0:
-            plate.cubes += 1
-            self.cubes -= 1
-            return True
-        return False
+        """If possible, place a Cube from the Robot on the adjacent Plate."""
+        def finish():
+            plate = self.location.adjacent_plate
+            if plate is not None and self.cubes > 0:
+                plate.cubes += 1
+                self.cubes -= 1
+        self.schedule_action(1, finish, 'place')
 
 
 class Plate(object):
@@ -311,10 +324,8 @@ class Scale(Agent):
         self.back_plate = Plate(self._plate_name("Back"))
 
         self.forced = False
-        self.force_timeout = 0
         self.force_alliance = ''
         self.boosted = False
-        self.boost_timeout = 0
         self.boost_alliance = ''
         self.previous_owner = ''
 
@@ -355,10 +366,10 @@ class Scale(Agent):
         Start an alliance Force power-up.
         NOTE: VaultColumn.play() relies on this method selector name and signature.
         """
+        def finish():
         if self.autonomous:
             raise RuntimeError("Can't Force during autonomous")
         self.forced = True
-        self.force_timeout = self.time + FORCE_SECS
         self.force_alliance = alliance
 
     def boost(self, alliance):
@@ -366,21 +377,12 @@ class Scale(Agent):
         Start an alliance Boost power-up.
         NOTE: VaultColumn.play() relies on this method selector name and signature.
         """
+
         if self.autonomous:
             raise RuntimeError("Can't Boost during autonomous")
         self.boosted = True
-        self.boost_timeout = self.time + BOOST_SECS
         self.boost_alliance = alliance
-
-    def update(self, time):
-        super(Scale, self).update(time)
-
-        if self.forced and time >= self.force_timeout:
-            self.forced = False
-            self.force_alliance = ''
-        if self.boosted and time >= self.boost_timeout:
-            self.boosted = False
-            self.boost_alliance = ''
+        self.schedule_action(BOOST_SECS, finish, 'boost')
 
     def owner(self):
         """
@@ -443,7 +445,7 @@ class Switch(Scale):
         return o if o is self.alliance_end else ''
 
 
-class VaultColumn(Agent):
+class VaultColumn(object):
     def __init__(self, alliance, action, switch, scale):
         """
         RED or BLUE alliance.
@@ -465,7 +467,7 @@ class VaultColumn(Agent):
         return "VaultColumn({} {}) with {} Cubes".format(
             self.alliance, self.action, self._cubes)
 
-    def add(self, cubes):
+    def add_cube(self, cubes):
         # type: (int) -> int
         """Adds the given number of Cubes. Returns the new count."""
         if cubes < 0:
@@ -513,11 +515,6 @@ class Vault(Agent):
         cubes = [column.cubes for column in self.columns]
         return "Vault({}) with {} Cubes".format(self.alliance, cubes)
 
-    def update(self, time):
-        super(Vault, self).update(time)
-        for column in self.columns:
-            column.update(time)
-
     def score(self):
         return sum((column.score() for column in self.columns), Score.ZERO)
 
@@ -532,7 +529,7 @@ class RobotPlayer(object):
         robot.cubes = 1
         destination_name = "{}_{}_INNER_ZONE".format(
             robot.alliance, "FRONT" if robot.player < 3 else "BACK")
-        robot.head_to(Location[destination_name])
+        robot.drive_to(Location[destination_name])
 
     # TODO: A generator to yield Robot actions as the game proceeds.
 
