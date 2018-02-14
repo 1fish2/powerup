@@ -44,13 +44,19 @@ RED, BLUE = Color('RED'), Color('BLUE')
 RED.opposite, BLUE.opposite = BLUE, RED
 ALLIANCES = (RED, BLUE)
 
+# FMS start-of-match choices.
+# They could be random or just set how you want the simulation run to go.
+SWITCH_FRONT_COLOR, SCALE_FRONT_COLOR = BLUE, RED
+
+
+ScoreFactor = Enum('ScoreFactor', 'NOT_YET ACHIEVED COUNTED')
 
 # Robot locations. Cubes can also be in these locations and in Robots,
 # Switch plates, Scale plates, and Vault columns, but not *_PLATFORM_CLIMBED.
 # The Scoring Table is at the "back side."
 # The red/blue "outer zone" is between the alliance wall and the auto-line.
 #
-# TODO: Split these finer, esp. front/back outer zone?
+# TODO: Split these zones finer, esp. front/back outer zone?
 Location = Enum(
     'Location',
     'RED_EXCHANGE_ZONE BLUE_EXCHANGE_ZONE '
@@ -62,22 +68,21 @@ Location = Enum(
     'RED_PLATFORM BLUE_PLATFORM RED_PLATFORM_CLIMBED BLUE_PLATFORM_CLIMBED '
     'FRONT_NULL_TERRITORY BACK_NULL_TERRITORY ')
 
-for loc in Location:
-    loc.is_inner_zone = loc.name.endswith('_INNER_ZONE')
-    loc.cubes = 0  # The number of cubes in this Location.
-    loc.adjacent_plate = None  # Adjacent seesaw Plate; set in seesaw __init__().
-
-ScoreFactor = Enum('ScoreFactor', 'NOT_YET ACHIEVED COUNTED')
-
-TRAVEL_TIMES = dict()  # map from (location1, location2) -> Robot travel time in seconds
+TRAVEL_TIMES = dict()  # map (location1, location2) -> Robot travel time in seconds
 
 
-def _init_travel_times():
+def _init_locations():
     """
-    Initialize travel times for direct paths. In this simulation, a Robot will
-    jump to the destination after this many seconds. Drive longer routes as a
-    sequence of direct paths via intermediate Locations *OUTER_ZONE,
-    *INNER_ZONE, *SWITCH_FENCE, *PLATFORM, *NULL_TERRITORY.
+    Initialize Location properties and TRAVEL_TIMES for direct paths.
+    In this simulation, a Robot will jump to the destination after this
+    many seconds. Drive longer routes as a sequence of direct paths via
+    intermediate Locations *OUTER_ZONE, *INNER_ZONE, *SWITCH_FENCE,
+    *PLATFORM, *NULL_TERRITORY.
+
+    NOTE: An expedient approach here keeps simulation-specific state
+    .adjacent_plate and .cubes in Location properties. Call this again
+    to reinitialize before re-running the simulation. A better approach
+    would store this state in dicts in the Simulation object.
     """
     def set_pairs(location_name1, location_name2, time):
         """Set RED and BLUE forward and reverse travel times."""
@@ -86,6 +91,11 @@ def _init_travel_times():
             location2 = Location[location_name2.replace(RED, alliance)]
             TRAVEL_TIMES[(location1, location2)] \
                 = TRAVEL_TIMES[(location2, location1)] = time
+
+    for loc in Location:
+        loc.is_inner_zone = loc.name.endswith('_INNER_ZONE')
+        loc.cubes = 0  # The number of cubes in this Location.
+        loc.adjacent_plate = None  # Adjacent seesaw Plate; set by seesaw __init__().
 
     set_pairs('RED_OUTER_ZONE', 'RED_EXCHANGE_ZONE', 2)
     set_pairs('RED_OUTER_ZONE', 'RED_FRONT_PORTAL', 5)
@@ -104,7 +114,7 @@ def _init_travel_times():
     set_pairs('RED_BACK_INNER_ZONE', 'BACK_NULL_TERRITORY', 6)
 
 
-_init_travel_times()
+_init_locations()
 
 
 def typename(value):
@@ -178,6 +188,12 @@ class Agent(object):
         self.scheduled_action = action
         self.scheduled_action_description = description
 
+        self.scheduled_action_done(description)
+
+    def scheduled_action_done(self, description):
+        """Called after a scheduled action completed."""
+        pass
+
 
 class GameOver(Exception):
     pass
@@ -211,9 +227,13 @@ class Simulation(object):
             agent.update(time)
 
 
-# TODO: pickup(), drop(), and place() should take at least 1 second.
-# TODO: Disallow more than 1 action (Cube or driving) at a time, either by
-# canceling the current action or not starting another.
+# NOTE: This won't allow more than 1 action (Cube or driving) at a time
+# by the simple (and a bit fragile) mechanism where these action methods
+# just schedule the completion code which does the actual changes and
+# schedule_action() replaces any previously scheduled action.
+#
+# TODO: Should pickup() et al do the change at the start of the second
+# to claim the Cube?
 class Robot(Agent):
     def __init__(self, alliance, player, location=None):
         """
@@ -528,14 +548,23 @@ class Vault(Agent):
 
 class RobotPlayer(object):
     """Chooses a Robot's actions: Preload a Cube or not, driving plans, etc."""
+    # TODO: Split out Robot 1, 2, and 3 players.
     def __init__(self, robot):
         self.robot = robot
 
-        # First cut decisions: Preload Cubes in all Robots and drive to
-        # earn auto-run points.
+        # First cut decisions: Preload Cubes in all Robots, drive to
+        # earn auto-run points and go toward the desired Scale/Switch
+        # Plate.
         robot.cubes = 1
+
+        alliance = robot.alliance
+        go_front = True
+        if robot.player == 1:  # go to the desired Switch plate
+            go_front = SWITCH_FRONT_COLOR is alliance
+        elif robot.player == 2:  # go toward the desired Scale plate
+            go_front = SCALE_FRONT_COLOR is alliance
         destination_name = "{}_{}_INNER_ZONE".format(
-            robot.alliance, "FRONT" if robot.player < 3 else "BACK")
+            alliance, "FRONT" if go_front else "BACK")
         robot.drive_to(Location[destination_name])
 
     # TODO: A generator to yield Robot actions as the game proceeds.
@@ -549,32 +578,18 @@ class HumanPlayer(object):
     # TODO: A generator to yield human player actions as the game proceeds.
 
 
-def _fms_choices():
-    """
-    Return the FMS's start-of-match choices: (switch_front_color, scale_front_color).
-
-    NOTE: Teams should not see this info when placing Robots on the field.
-    At match start, RobotPlayers can read game.scale.front_color,
-    game.red_switch.front_color, game.switches[RED].front_color, etc.
-    """
-    # This could be random or else set how you want a simulation run to start.
-    return BLUE, RED
-
-
 class PowerUpGame(Simulation):
     def __init__(self):
         super(PowerUpGame, self).__init__()
-
-        switch_front_color, scale_front_color = _fms_choices()
 
         # Create and add all the game objects.
         self.robots = [Robot(alliance, player)
                        for alliance in ALLIANCES
                        for player in xrange(1, 4)]
 
-        self.red_switch = Switch(RED, switch_front_color)
-        self.blue_switch = Switch(BLUE, switch_front_color)
-        self.scale = Scale(scale_front_color)
+        self.red_switch = Switch(RED, SWITCH_FRONT_COLOR)
+        self.blue_switch = Switch(BLUE, SWITCH_FRONT_COLOR)
+        self.scale = Scale(SCALE_FRONT_COLOR)
         self.switches = {RED: self.red_switch, BLUE: self.blue_switch}
         self.seesaws = [self.red_switch, self.blue_switch, self.scale]
 
