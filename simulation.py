@@ -20,7 +20,7 @@ Split this file into framework simulation.py, agents, and game.py.
 from collections import namedtuple
 import csv
 from enum import Enum  # PyPI enum34
-from itertools import chain
+import itertools
 
 AUTONOMOUS_SECS = 15
 TELEOP_SECS = 2 * 60 + 15
@@ -163,6 +163,8 @@ class Agent(object):
             self.scheduled_action()
             self.scheduled_action = None
             self.scheduled_action_description = ''
+            self.scheduled_action_done()
+
 
     def score(self):
         """
@@ -188,9 +190,7 @@ class Agent(object):
         self.scheduled_action = action
         self.scheduled_action_description = description
 
-        self.scheduled_action_done(description)
-
-    def scheduled_action_done(self, description):
+    def scheduled_action_done(self):
         """Called after a scheduled action completed."""
         pass
 
@@ -235,25 +235,26 @@ class Simulation(object):
 # TODO: Should pickup() et al do the change at the start of the second
 # to claim the Cube?
 class Robot(Agent):
-    def __init__(self, alliance, player, location=None):
+    def __init__(self, alliance, team_position, location=None):
         """
         :param alliance: RED or BLUE
-        :param player: 1, 2, or 3
+        :param team_position: 1, 2, or 3
         :param location: a Location (defaults to the alliance's outer zone)
         """
         super(Robot, self).__init__()
         self.alliance = alliance
-        self.player = player
+        self.team_position = team_position
 
         if location is None:
             location = Location.RED_OUTER_ZONE if alliance is RED else Location.BLUE_OUTER_ZONE
         self.location = location
         self.cubes = 0
         self.auto_run = ScoreFactor.NOT_YET
+        self.player = itertools.repeat("--")  # a default generator
 
     @property
     def name(self):
-        return "Robot({}{})".format(self.alliance, self.player)
+        return "Robot({}{})".format(self.alliance, self.team_position)
 
     def __str__(self):
         # TODO: Include the current action and destination.
@@ -276,11 +277,28 @@ class Robot(Agent):
         # TODO: Add Parking or Climbing points.
         return points
 
+    def scheduled_action_done(self):
+        # TODO: Put the returned description in CSV output? Else have
+        # the generator just return ().
+        self.player.next()
+
+    def set_player(self, generator):
+        """
+        Set the generator that chooses Robot actions and call it once
+        to do the initial actions.
+        """
+        self.player = generator
+        self.scheduled_action_done()
+
     def drive_to(self, destination):
         """
-        Begin driving to the given destination, replacing any current action.
-        Does no path planning -- raises KeyError if destination is not adjacent.
+        Begin driving to the destination Location or Location name,
+        replacing any current action. Does no path planning -- raises
+        KeyError if the destination is not adjacent.
         """
+        if isinstance(destination, str):
+            destination = Location[destination]
+
         def arrive():
             self.location = destination
             if (self.auto_run is ScoreFactor.NOT_YET
@@ -333,12 +351,12 @@ class Plate(object):
 
 class Scale(Agent):
     """A Scale, also the base class for Switch."""
-    def __init__(self, front_color):
+    def __init__(self, front_color, alliance_end=''):
         """
         :param front_color: RED or BLUE, selected by the FMS
         """
         super(Scale, self).__init__()
-        self.alliance_end = ''
+        self.alliance_end = alliance_end
         self.front_color = front_color
         self.front_plate = Plate(self._plate_name("Front"))
         self.back_plate = Plate(self._plate_name("Back"))
@@ -360,8 +378,9 @@ class Scale(Agent):
 
     @property
     def name(self):
-        return "{}({}/{})".format(
-            typename(self), self.alliance_end, self.front_color)
+        spacer = ' ' if self.alliance_end else ''
+        return "{}{}{} front:{}".format(
+            self.alliance_end, spacer, typename(self), self.front_color)
 
     def __str__(self):
         return "{} with {} Cube(s)".format(self.name, self.cubes)
@@ -369,7 +388,7 @@ class Scale(Agent):
     def csv_header(self):
         # TODO: Add forced and boosted state.
         name = self.name
-        return [name + ' Owner', name + ' Cubes']
+        return [name + ' Owner', name + ' (front, back) Cubes']
 
     def csv_row(self):
         return [self.owner(), self.cubes]
@@ -436,13 +455,12 @@ class Scale(Agent):
 
 class Switch(Scale):
     """A Switch."""
-    def __init__(self, alliance_end, front_color):
+    def __init__(self, front_color, alliance_end):
         """
         :param alliance_end: RED or BLUE end of the field
         :param front_color: RED or BLUE, selected by the FMS
         """
-        super(Switch, self).__init__(front_color)
-        self.alliance_end = alliance_end
+        super(Switch, self).__init__(front_color, alliance_end)
 
     def _plate_name(self, front_back):
         """Return a string like 'Front RED Switch' to make 'Front RED Switch Plate'."""
@@ -546,36 +564,66 @@ class Vault(Agent):
         return sum((column.score() for column in self.columns), Score.ZERO)
 
 
-class RobotPlayer(object):
-    """Chooses a Robot's actions: Preload a Cube or not, driving plans, etc."""
-    # TODO: Split out Robot 1, 2, and 3 players.
-    def __init__(self, robot):
-        self.robot = robot
+def robot_player(robot):
+    """
+    Set a Robot's "player" -- a generator to choose actions like preload
+    a Cube and drive to the inner zone. The Robot will yield to the
+    generator each time it needs instructions; that in turn updates the
+    Robot and returns a behavior description.
+    """
+    # First cut: Preload Cubes in all Robots, drive to earn auto-run
+    # points, and place a Cube.
 
-        # First cut decisions: Preload Cubes in all Robots, drive to
-        # earn auto-run points and go toward the desired Scale/Switch
-        # Plate.
+    alliance = robot.alliance
+
+    def player1():
         robot.cubes = 1
 
-        alliance = robot.alliance
-        go_front = True
-        if robot.player == 1:  # go to the desired Switch plate
-            go_front = SWITCH_FRONT_COLOR is alliance
-        elif robot.player == 2:  # go toward the desired Scale plate
-            go_front = SCALE_FRONT_COLOR is alliance
         destination_name = "{}_{}_INNER_ZONE".format(
-            alliance, "FRONT" if go_front else "BACK")
-        robot.drive_to(Location[destination_name])
+            alliance, "FRONT" if SWITCH_FRONT_COLOR is alliance else "BACK")
+        robot.drive_to(destination_name)
+        yield "auto-run to my Switch plate"
 
-    # TODO: A generator to yield Robot actions as the game proceeds.
+        robot.place()
+        yield "place a Cube on the Switch"
 
+        while True:
+            yield "done"
 
-class HumanPlayer(object):
-    """Chooses a human player's actions."""
-    def __init__(self, alliance):
-        self.alliance = alliance
+    def player2():
+        robot.cubes = 1
 
-    # TODO: A generator to yield human player actions as the game proceeds.
+        destination_name = "{}_{}_INNER_ZONE".format(
+            alliance, "FRONT" if SCALE_FRONT_COLOR is alliance else "BACK")
+        robot.drive_to(destination_name)
+        yield "auto-run"
+
+        destination_name = "{}_NULL_TERRITORY".format(
+            "FRONT" if SCALE_FRONT_COLOR is alliance else "BACK")
+        robot.drive_to(destination_name)
+        yield "go to my Scale plate"
+
+        robot.place()
+        yield "place a Cube on the Scale"
+
+        while True:
+            yield "done"
+
+    def player3():
+        robot.cubes = 1
+
+        destination_name = "{}_{}_INNER_ZONE".format(alliance, "FRONT")
+        robot.drive_to(destination_name)
+        yield "auto-run"
+
+        robot.drop()
+        yield "drop a Cube on the field"
+
+        while True:
+            yield "done"
+
+    generator = {1: player1, 2: player2, 3: player3}[robot.team_position]()
+    robot.set_player(generator)
 
 
 class PowerUpGame(Simulation):
@@ -583,12 +631,12 @@ class PowerUpGame(Simulation):
         super(PowerUpGame, self).__init__()
 
         # Create and add all the game objects.
-        self.robots = [Robot(alliance, player)
+        self.robots = [Robot(alliance, position)
                        for alliance in ALLIANCES
-                       for player in xrange(1, 4)]
+                       for position in xrange(1, 4)]
 
-        self.red_switch = Switch(RED, SWITCH_FRONT_COLOR)
-        self.blue_switch = Switch(BLUE, SWITCH_FRONT_COLOR)
+        self.red_switch = Switch(SWITCH_FRONT_COLOR, RED)
+        self.blue_switch = Switch(SWITCH_FRONT_COLOR, BLUE)
         self.scale = Scale(SCALE_FRONT_COLOR)
         self.switches = {RED: self.red_switch, BLUE: self.blue_switch}
         self.seesaws = [self.red_switch, self.blue_switch, self.scale]
@@ -596,18 +644,18 @@ class PowerUpGame(Simulation):
         self.vaults = {RED: Vault(RED, self.red_switch, self.scale),
                        BLUE: Vault(BLUE, self.blue_switch, self.scale)}
 
-        for agent in chain(self.robots, self.seesaws, self.vaults.itervalues()):
+        for agent in itertools.chain(self.robots, self.seesaws,
+                                     self.vaults.itervalues()):
             self.add(agent)
 
         # Start keeping score.
         self.score = Score.ZERO
 
-        # Create the player decision objects. They can now look at the
-        # Switch/Scale front colors.
-        self.robot_players = [RobotPlayer(robot) for robot in self.robots]
-        self.human_players = [HumanPlayer(alliance) for alliance in ALLIANCES]
+        # Set up the players.
+        [robot_player(robot) for robot in self.robots]
+        # TODO: [human_player(alliance) for alliance in ALLIANCES]
 
-        # Place the remaining Cubes on the field now that RobotPlayers preloaded some.
+        # Place the remaining Cubes on the field now that Robot players preloaded some.
         self._place_cubes()
 
     def _initial_portal_cubes(self, alliance):
