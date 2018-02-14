@@ -575,13 +575,17 @@ def robot_player(robot):
     # points, and place a Cube.
 
     alliance = robot.alliance
+    switch_side = "FRONT" if SWITCH_FRONT_COLOR is alliance else "BACK"
+    scale_side = "FRONT" if SCALE_FRONT_COLOR is alliance else "BACK"
+
+    def drive_to(pattern, *args):
+        destination_name = pattern.format(*args)
+        robot.drive_to(destination_name)
 
     def player1():
         robot.cubes = 1
 
-        destination_name = "{}_{}_INNER_ZONE".format(
-            alliance, "FRONT" if SWITCH_FRONT_COLOR is alliance else "BACK")
-        robot.drive_to(destination_name)
+        drive_to("{}_{}_INNER_ZONE", alliance, switch_side)
         yield "auto-run to my Switch plate"
 
         robot.place()
@@ -593,14 +597,10 @@ def robot_player(robot):
     def player2():
         robot.cubes = 1
 
-        destination_name = "{}_{}_INNER_ZONE".format(
-            alliance, "FRONT" if SCALE_FRONT_COLOR is alliance else "BACK")
-        robot.drive_to(destination_name)
+        drive_to("{}_{}_INNER_ZONE", alliance, scale_side)
         yield "auto-run"
 
-        destination_name = "{}_NULL_TERRITORY".format(
-            "FRONT" if SCALE_FRONT_COLOR is alliance else "BACK")
-        robot.drive_to(destination_name)
+        drive_to("{}_NULL_TERRITORY", scale_side)
         yield "go to my Scale plate"
 
         robot.place()
@@ -612,8 +612,7 @@ def robot_player(robot):
     def player3():
         robot.cubes = 1
 
-        destination_name = "{}_{}_INNER_ZONE".format(alliance, "FRONT")
-        robot.drive_to(destination_name)
+        drive_to("{}_{}_INNER_ZONE", alliance, "FRONT")
         yield "auto-run"
 
         robot.drop()
