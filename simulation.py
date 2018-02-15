@@ -245,8 +245,7 @@ class Simulation(object):
 # just schedule the completion code which does the actual changes and
 # schedule_action() replaces any previously scheduled action.
 #
-# TODO: Should pickup() et al do the change at the start of the second
-# to claim the Cube?
+# TODO: Make pickup() claim the Cube at the start of the second?
 class Robot(Agent):
     def __init__(self, alliance, team_position, location=None):
         """
@@ -625,17 +624,17 @@ def robot_player(robot):
     def player3():
         robot.cubes = 1
 
-        drive_to("{}_{}_INNER_ZONE", alliance, "FRONT")
-        yield "auto-run"
-
-        drive_to("{}_OUTER_ZONE", alliance)
-        yield "toward Exchange"
-
         drive_to("{}_EXCHANGE_ZONE", alliance)
         yield "to Exchange"
 
         robot.drop()
         yield "put a Cube into the Exchange"
+
+        drive_to("{}_OUTER_ZONE", alliance)
+        yield "auto-run"
+
+        drive_to("{}_{}_INNER_ZONE", alliance, "FRONT")
+        yield "auto-run"
 
         while True:
             yield "done"
