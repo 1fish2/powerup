@@ -628,8 +628,14 @@ def robot_player(robot):
         drive_to("{}_{}_INNER_ZONE", alliance, "FRONT")
         yield "auto-run"
 
+        drive_to("{}_OUTER_ZONE", alliance)
+        yield "toward Exchange"
+
+        drive_to("{}_EXCHANGE_ZONE", alliance)
+        yield "to Exchange"
+
         robot.drop()
-        yield "drop a Cube on the field"
+        yield "put a Cube into the Exchange"
 
         while True:
             yield "done"
