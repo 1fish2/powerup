@@ -3,13 +3,14 @@
 """
 FRC PowerUp game score simulation.
 
-TODO: More Robot and human player behaviors, queued power-ups;
+TODO: Human player actions (Cubes and power-ups), more Robot and human
+player behaviors;
 More scoring: parked/climbed, ...;
 Power-ups {red, blue} x {force, levitate, boost} {unused, queued, played};
 Portals;
 Ranking points: 2 for win, 1 for tie, +1 for 3-robot climb, +1 for auto-quest
 (3 auto-runs AND own your switch).
-Enforce more rules, e.g. at least 5 cubes in each portal at start-of-match.
+Enforce more rules?
 
 Example robot actions: "scoring in switch", "getting cube from left portal",
 "going to climb", "climbing".
@@ -36,7 +37,9 @@ GAIN_SCALE_AUTO_POINTS = 2
 
 class Color(str):
     """An alliance color name that supports a .opposite property."""
-    pass
+    def __init__(self, name):
+        super(Color, self).__init__(name)
+        self.opposite = None  # filled in after creating the instances
 
 
 # Singleton alliance Color objects.
@@ -81,14 +84,24 @@ def _init_locations():
 
     NOTE: An expedient approach here keeps simulation-specific state
     .adjacent_plate and .cubes in Location properties. Call this again
-    to reinitialize before re-running the simulation. A better approach
-    would store this state in dicts in the Simulation object.
+    to reset before re-running the simulation. A better approach would
+    store that state in dicts in the Simulation object.
     """
+    def locate(location_name, color1):
+        """
+        Get the concrete Location from the name after substituting
+        alliance color names RED/BLUE or vice versa for the template's
+        token color names 'red'/'blue'.
+        """
+        color2 = color1.opposite
+        return Location[
+            location_name.replace('red', color1).replace('blue', color2)]
+
     def set_pairs(location_name1, location_name2, time):
         """Set RED and BLUE forward and reverse travel times."""
         for alliance in ALLIANCES:
-            location1 = Location[location_name1.replace(RED, alliance)]
-            location2 = Location[location_name2.replace(RED, alliance)]
+            location1 = locate(location_name1, alliance)
+            location2 = locate(location_name2, alliance)
             TRAVEL_TIMES[(location1, location2)] \
                 = TRAVEL_TIMES[(location2, location1)] = time
 
@@ -97,21 +110,21 @@ def _init_locations():
         loc.cubes = 0  # The number of cubes in this Location.
         loc.adjacent_plate = None  # Adjacent seesaw Plate; set by seesaw __init__().
 
-    set_pairs('RED_OUTER_ZONE', 'RED_EXCHANGE_ZONE', 2)
-    set_pairs('RED_OUTER_ZONE', 'RED_FRONT_PORTAL', 5)
-    set_pairs('RED_OUTER_ZONE', 'RED_BACK_PORTAL', 5)
-    set_pairs('RED_OUTER_ZONE', 'RED_POWER_CUBE_ZONE', 2)
-    set_pairs('RED_OUTER_ZONE', 'RED_FRONT_INNER_ZONE', 6)
-    set_pairs('RED_OUTER_ZONE', 'RED_BACK_INNER_ZONE', 6)
+    set_pairs('red_OUTER_ZONE', 'red_EXCHANGE_ZONE', 2)
+    set_pairs('red_OUTER_ZONE', 'blue_FRONT_PORTAL', 5)
+    set_pairs('red_OUTER_ZONE', 'blue_BACK_PORTAL', 5)
+    set_pairs('red_OUTER_ZONE', 'red_POWER_CUBE_ZONE', 2)
+    set_pairs('red_OUTER_ZONE', 'red_FRONT_INNER_ZONE', 6)
+    set_pairs('red_OUTER_ZONE', 'red_BACK_INNER_ZONE', 6)
 
-    set_pairs('RED_SWITCH_FENCE', 'RED_FRONT_INNER_ZONE', 4)
-    set_pairs('RED_SWITCH_FENCE', 'RED_BACK_INNER_ZONE', 4)
-    set_pairs('RED_SWITCH_FENCE', 'RED_PLATFORM', 2)
-    set_pairs('RED_PLATFORM', 'RED_FRONT_INNER_ZONE', 4)
-    set_pairs('RED_PLATFORM', 'RED_BACK_INNER_ZONE', 4)
+    set_pairs('red_SWITCH_FENCE', 'red_FRONT_INNER_ZONE', 4)
+    set_pairs('red_SWITCH_FENCE', 'red_BACK_INNER_ZONE', 4)
+    set_pairs('red_SWITCH_FENCE', 'red_PLATFORM', 2)
+    set_pairs('red_PLATFORM', 'red_FRONT_INNER_ZONE', 4)
+    set_pairs('red_PLATFORM', 'red_BACK_INNER_ZONE', 4)
 
-    set_pairs('RED_FRONT_INNER_ZONE', 'FRONT_NULL_TERRITORY', 6)
-    set_pairs('RED_BACK_INNER_ZONE', 'BACK_NULL_TERRITORY', 6)
+    set_pairs('red_FRONT_INNER_ZONE', 'FRONT_NULL_TERRITORY', 6)
+    set_pairs('red_BACK_INNER_ZONE', 'BACK_NULL_TERRITORY', 6)
 
 
 _init_locations()
