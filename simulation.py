@@ -56,7 +56,7 @@ ScoreFactor = Enum('ScoreFactor', 'NOT_YET ACHIEVED COUNTED')
 #   on Switch Plates,
 #   on Scale Plates,
 #   in Vault Columns,
-#   [TODO: Exchange input and output],
+#   on Exchange conveyor Plates (from Robot to STATION),
 #   with Human players.
 #
 # The Scoring Table is at the 'BACK'.
@@ -345,10 +345,9 @@ class Robot(Agent):
 
     def drop(self):
         """
-        If the Robot has a Cube, drop it here. In an Exchange zone
-        or Portal zone, this puts the Cube in the Exchange or Portal. Next to a
-        seesaw Plate, this drops a Cube on the ground; call place() to place the
-        Cube on the Plate.
+        If the Robot has a Cube, drop it here. Next to a seesaw Plate or
+        Exchange Plate, this just drops a Cube on the ground; call place()
+        to place the Cube on the adjacent Switch/Scale/Exchange Plate.
         """
         def finish():
             if self.cubes > 0:
@@ -358,7 +357,11 @@ class Robot(Agent):
         self.schedule_action(1, finish, 'drop')
 
     def place(self):
-        """If possible, place a Cube from the Robot on the adjacent Plate."""
+        """
+        If possible, place a Cube from the Robot on the adjacent
+        Switch/Scale/Exchange Plate.
+        TODO: Should the Exchange conveyor Plate support multiple Cubes?
+        """
         def finish():
             plate = self.location.adjacent_plate
             if plate is not None and self.cubes > 0:
@@ -373,13 +376,15 @@ class Human(Agent):
     A Human player Agent, responsible for actions in the Alliance
     station or at a Portal. Its "player" makes the game decisions.
     """
-    # TODO: Distinguish Exchange input, output, and field Location.
     # TODO: Model travel steps in the Alliance station? Currently the
     # Cube actions just include some average travel time.
     def __init__(self, alliance, position, vault):
         """
-        A Human player in the Alliance station (with a Vault ref and an
-        Exchange Location ref) or at a Portal (with a portal Location ref).
+        A Human player in the Alliance STATION (with a Vault ref, an
+        Exchange Location ref, and an Exchange Plate) or at a FRONT/BACK
+        Portal (with a Portal Location ref). (Those refs are None when
+        irrelevant to catch any buggy attempts for the wrong Human
+        player to access them.)
 
         position: 'FRONT', 'BACK', or 'STATION'.
         """
@@ -387,10 +392,12 @@ class Human(Agent):
         self.alliance = alliance
         self.position = position
 
-        self.vault = self.exchange = self.portal = None
+        self.vault = self.exchange_plate = self.exchange_zone = self.portal = None
         if position == 'STATION':
             self.vault = vault
-            self.exchange = location_by_pattern('{}_EXCHANGE_ZONE', alliance)
+            self.exchange_plate = Plate("{} Exchange Plate".format(alliance))
+            self.exchange_zone = location_by_pattern('{}_EXCHANGE_ZONE', alliance)
+            self.exchange_zone.adjacent_plate = self.exchange_plate
         else:
             self.portal = location_by_pattern('{}_{}_PORTAL', alliance, position)
 
@@ -406,10 +413,16 @@ class Human(Agent):
 
     def csv_header(self):
         name = self.name
-        return [name + ' Cubes', name + ' Action']
+        header = [name + ' Cubes', name + ' Action']
+        if self.exchange_plate:
+            header.append('{} Exchange Cubes'.format(self.alliance))
+        return header
 
     def csv_row(self):
-        return [self.cubes, str(self.scheduled_action_description)]
+        row = [self.cubes, str(self.scheduled_action_description)]
+        if self.exchange_plate:
+            row.append(self.exchange_plate.cubes)
+        return row
 
     def scheduled_action_done(self):
         """A scheduled action completed so start the next one."""
@@ -421,20 +434,22 @@ class Human(Agent):
         self.scheduled_action_done()
 
     def get_from_exchange(self):
-        """Get a Cube from the Exchange."""
+        """Get a Cube from the Exchange Plate."""
         def finish():
-            if self.exchange.cubes > 0:
-                self.exchange.cubes -= 1
+            if self.exchange_plate.cubes > 0:
+                self.exchange_plate.cubes -= 1
                 self.cubes += 1
 
         self.schedule_action(4, finish, 'get from Exchange')
 
     def put_to_exchange(self):
-        """Put a Cube into the Exchange."""
+        """
+        Put a Cube through the Exchange Return to the Exchange zone on the field.
+        """
         def finish():
             if self.cubes > 0:
                 self.cubes -= 1
-                self.exchange.cubes += 1
+                self.exchange_zone.cubes += 1
 
         self.schedule_action(4, finish, 'put to Exchange')
 
@@ -445,7 +460,7 @@ class Human(Agent):
                 self.cubes -= 1
                 self.vault.column_map[column_name].add_cube(1)
 
-        self.schedule_action(4, finish, 'put to Vault')
+        self.schedule_action(6, finish, 'put to Vault')
 
     def put_through_portal(self, column_name):
         """Put a Cube through the Portal onto the field."""
@@ -460,7 +475,10 @@ class Human(Agent):
 
 
 class Plate(object):
-    """A Plate holding Cubes on one side of a "seesaw" (Scale or Switch)."""
+    """
+    A Plate holding Cubes on one side of a "seesaw" (Scale or Switch) or
+    an Exchange conveyor. Robots can put Cubes on Plates.
+    """
     def __init__(self, name):
         self.name = name
         self.cubes = 0
@@ -587,13 +605,11 @@ class Switch(Scale):
         return "{} {} {}".format(front_back, self.alliance_end, typename(self))
 
     def _setup_locations(self):
-        """Set up the adjacent Locations to point to the Plates."""
-        if self.alliance_end is RED:
-            Location.RED_FRONT_INNER_ZONE.adjacent_plate = self.front_plate
-            Location.RED_BACK_INNER_ZONE.adjacent_plate = self.back_plate
-        else:
-            Location.BLUE_FRONT_INNER_ZONE.adjacent_plate = self.front_plate
-            Location.BLUE_BACK_INNER_ZONE.adjacent_plate = self.back_plate
+        """Set up the adjacent Locations to refer to the Plates."""
+        location_by_pattern("{}_FRONT_INNER_ZONE", self.alliance_end
+                            ).adjacent_plate = self.front_plate
+        location_by_pattern("{}_BACK_INNER_ZONE", self.alliance_end
+                            ).adjacent_plate = self.back_plate
 
     def force(self, alliance):
         """Start an alliance Force; no-op if this isn't the alliance's Switch."""
