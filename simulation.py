@@ -60,8 +60,6 @@ ScoreFactor = Enum('ScoreFactor', 'NOT_YET ACHIEVED COUNTED')
 # The red/blue "outer zone" is between the alliance wall and the auto-line.
 #
 # TODO: Split these zones finer, esp. front/back outer zone?
-# TODO: Distinguish the Exchange Location for Robots from the Exchange
-# intake and the Exchange outtake?
 # TODO: Add Alliance Station Locations to put exchanged Cubes waiting to
 # go into the Vault or back into the Exchange?
 Location = Enum(
@@ -118,6 +116,10 @@ def _init_locations():
         loc.is_inner_zone = loc.name.endswith('_INNER_ZONE')
         loc.cubes = 0  # The number of cubes in this Location.
         loc.adjacent_plate = None  # Adjacent seesaw Plate; set by seesaw __init__().
+
+    for alliance in ALLIANCES:
+        location_by_pattern('{}_SWITCH_FENCE', alliance).cubes = 6
+        location_by_pattern('{}_POWER_CUBE_ZONE', alliance).cubes = 10
 
     set_pairs('red_OUTER_ZONE', 'red_EXCHANGE_ZONE', 2)
     set_pairs('red_OUTER_ZONE', 'blue_FRONT_PORTAL', 5)
@@ -285,7 +287,7 @@ class Robot(Agent):
     def csv_header(self):
         name = self.name
         # TODO: Add climbed/parked.
-        return [name + ' Location', name + ' Cubes', name + ' action']
+        return [name + ' Location', name + ' Cubes', name + ' Action']
 
     def csv_row(self):
         return [self.location.name, self.cubes, str(self.scheduled_action_description)]
@@ -366,35 +368,44 @@ class Robot(Agent):
 
 
 class Human(Agent):
-    """A human player Agent, responsible for actions, not decisions."""
-    # TODO: Model more than one Human player per Alliance station to
-    # shuttle Cubes from the Exchange to the Vault and to press power-up
-    # buttons?
-    # TODO: Model separate Human players at the Portals?
-    def __init__(self, alliance, vault):
+    """
+    A Human player Agent, responsible for actions in the Alliance
+    station or at a Portal. Its "player" makes the game decisions.
+    """
+    # TODO: Distinguish Exchange input, output, and field Location.
+    # TODO: Model travel steps in the Alliance station? Currently the
+    # Cube actions just include some average travel time.
+    def __init__(self, alliance, position, vault):
+        """
+        A Human player in the Alliance station (with a Vault ref and an
+        Exchange Location ref) or at a Portal (with a portal Location ref).
+
+        position: 'FRONT', 'BACK', or 'STATION'.
+        """
         super(Human, self).__init__()
         self.alliance = alliance
-        self.vault = vault
-        self.exchange = location_by_pattern('{}_EXCHANGE_ZONE', alliance)
+        self.position = position
 
-        self.cubes = 0
+        self.vault = self.exchange = self.portal = None
+        if position == 'STATION':
+            self.vault = vault
+            self.exchange = location_by_pattern('{}_EXCHANGE_ZONE', alliance)
+        else:
+            self.portal = location_by_pattern('{}_{}_PORTAL', alliance, position)
+
+        self.cubes = 0  # PowerUpGame will preload Cubes for Portal Humans
         self.player = itertools.repeat("--")  # a no-op generator
 
     @property
     def name(self):
-        return "{} Human Player".format(self.alliance)
+        return "{} {} Human Player".format(self.alliance, self.position)
 
     def __str__(self):
         return "{} with {} Cube(s)".format(self.name, self.cubes)
 
-    @property
-    def cubes_in_exchange(self):
-        """The number of Cubes gettable from the Exchange."""
-        return self.exchange.cubes
-
     def csv_header(self):
         name = self.name
-        return [name + ' Cubes', name + ' action']
+        return [name + ' Cubes', name + ' Action']
 
     def csv_row(self):
         return [self.cubes, str(self.scheduled_action_description)]
@@ -408,18 +419,43 @@ class Human(Agent):
         self.player = generator
         self.scheduled_action_done()
 
-    def get_exchanged_cube(self):
+    def get_from_exchange(self):
         """Get a Cube from the Exchange."""
         def finish():
-            if self.cubes_in_exchange > 0:
+            if self.exchange.cubes > 0:
                 self.exchange.cubes -= 1
                 self.cubes += 1
 
-        self.schedule_action(2, finish, 'get from Exchange')
+        self.schedule_action(4, finish, 'get from Exchange')
 
-    # TODO: Action methods to put Cubes in Vault columns, maybe separate
-    # actions for moving from Exchange to/from Vault.
-    # TODO: Action methods for delivering Cubes to front/back Portals.
+    def put_to_exchange(self):
+        """Put a Cube into the Exchange."""
+        def finish():
+            if self.cubes > 0:
+                self.cubes -= 1
+                self.exchange.cubes += 1
+
+        self.schedule_action(4, finish, 'put to Exchange')
+
+    def put_to_vault(self, column_name):
+        """Put a Cube into a Vault column 'force', 'levitate', or 'boost'."""
+        def finish():
+            if self.cubes > 0:
+                self.cubes -= 1
+                self.vault.column_map[column_name].add_cube(1)
+
+        self.schedule_action(4, finish, 'put to Vault')
+
+    def put_through_portal(self, column_name):
+        """Put a Cube through the Portal onto the field."""
+        def finish():
+            if self.cubes > 0:
+                self.cubes -= 1
+                self.portal.cubes += 1
+
+        self.schedule_action(3, finish, 'put through Portal')
+
+    # TODO: An action to push Power-up buttons.
 
 
 class Plate(object):
@@ -576,8 +612,8 @@ class Switch(Scale):
 class VaultColumn(object):
     def __init__(self, alliance, action, switch, scale):
         """
-        RED or BLUE alliance.
-        action is 'force' or 'boost' (a Scale/Switch method selector) or 'levitate'.
+        alliance: RED or BLUE.
+        action: 'force' or 'boost' (a Scale/Switch method selector) or 'levitate'.
         """
         super(VaultColumn, self).__init__()
         self.alliance = alliance
@@ -627,21 +663,32 @@ class VaultColumn(object):
 
 
 class Vault(Agent):
-    """
-    An alliance's Vault for power-ups.
-    Example usage: vault.force.play().
-    """
+    """An alliance's Vault for power-ups."""
     def __init__(self, alliance, switch, scale):
         super(Vault, self).__init__()
         self.alliance = alliance
         self.columns = tuple(VaultColumn(alliance, action, switch, scale)
                              for action in ('force', 'levitate', 'boost'))
-        self.force, self.levitate, self.boost = self.columns
+        self.column_map = {column.action: column for column in self.columns}
         self.switch, self.scale = switch, scale
 
+    @property
+    def name(self):
+        return "{} Vault".format(self.alliance)
+
+    @property
+    def cubes(self):
+        return tuple(column.cubes for column in self.columns)
+
     def __str__(self):
-        cubes = [column.cubes for column in self.columns]
-        return "Vault({}) with {} Cubes".format(self.alliance, cubes)
+        return "{} Vault with {} Cubes".format(self.alliance, self.cubes)
+
+    def csv_header(self):
+        name = self.name
+        return [name + ' Cubes']
+
+    def csv_row(self):
+        return [self.cubes]
 
     def score(self):
         return sum((column.score() for column in self.columns), Score.ZERO)
@@ -714,7 +761,14 @@ def robot_player(robot):
 
 
 def human_player(human):
-    """A human "game player" (decider) generator."""
+    """
+    A Human "game player" (decider) -- a generator that chooses behaviors
+    like put Cube through Portal. The Human yields to this generator each
+    time it needs instructions; this generator in turn updates the Human
+    and returns a behavior description.
+
+    The actions depend on player position.
+    """
     def player():
         # TODO: ...
         while True:
@@ -738,15 +792,19 @@ class PowerUpGame(Simulation):
         self.switches = {RED: self.red_switch, BLUE: self.blue_switch}
         self.seesaws = [self.red_switch, self.blue_switch, self.scale]
 
-        self.vaults = {RED: Vault(RED, self.red_switch, self.scale),
-                       BLUE: Vault(BLUE, self.blue_switch, self.scale)}
+        self.vaults = [Vault(RED, self.red_switch, self.scale),
+                       Vault(BLUE, self.blue_switch, self.scale)]
+        self.vault_map = {vault.alliance: vault for vault in self.vaults}
 
-        self.humans = [Human(alliance, self.vaults[alliance])
-                       for alliance in ALLIANCES]
+        self.humans = [Human(alliance, position, self.vault_map[alliance])
+                       for alliance in ALLIANCES
+                       for position in ('FRONT', 'BACK', 'STATION')]
+        self.humans_map = {(human.alliance, human.position): human
+                           for human in self.humans}
 
+        # The order affects update() order and CSV column order.
         for agent in itertools.chain(
-                self.robots, self.humans, self.seesaws,
-                self.vaults.itervalues()):
+                self.robots, self.humans, self.seesaws, self.vaults):
             self.add(agent)
 
         # Start keeping score.
@@ -756,23 +814,14 @@ class PowerUpGame(Simulation):
         [robot_player(robot) for robot in self.robots]
         [human_player(human) for human in self.humans]
 
-        # Now place the remaining Cubes on the field.
-        self._place_cubes()
-
-    def _initial_portal_cubes(self, alliance):
-        """Returns (# front portal cubes, # back portal cubes) for the given Alliance."""
-        cubes_in_robots = sum(robot.cubes for robot in self.robots if robot.alliance is alliance)
-        total_portal_cubes = 7 * 2 - cubes_in_robots
-        front_portal_cubes = total_portal_cubes // 2
-        return front_portal_cubes, (total_portal_cubes - front_portal_cubes)
-
-    def _place_cubes(self):
-        Location.RED_FRONT_PORTAL.cubes, Location.RED_BACK_PORTAL.cubes \
-            = self._initial_portal_cubes(RED)
-        Location.BLUE_FRONT_PORTAL.cubes, Location.BLUE_BACK_PORTAL.cubes \
-            = self._initial_portal_cubes(BLUE)
-        Location.RED_SWITCH_FENCE.cubes = Location.BLUE_SWITCH_FENCE.cubes = 6
-        Location.RED_POWER_CUBE_ZONE.cubes = Location.BLUE_POWER_CUBE_ZONE.cubes = 10
+        # Now give the remaining Cubes to the Human players at the Portals.
+        for alliance in ALLIANCES:
+            cubes_in_robots = sum(robot.cubes for robot in self.robots
+                                  if robot.alliance is alliance)
+            portal_cubes = 7 * 2 - cubes_in_robots
+            front_cubes = portal_cubes // 2
+            self.humans_map[(alliance, 'FRONT')].cubes = front_cubes
+            self.humans_map[(alliance, 'BACK')].cubes = portal_cubes - front_cubes
 
     def tick(self):
         """Advance time and update the running score."""
@@ -801,15 +850,6 @@ class PowerUpGame(Simulation):
 
         print "*** Final score: {} ***".format(self.score)
         print
-
-    def force(self, alliance):
-        self.vaults[alliance].force.play()
-
-    def levitate(self, alliance):
-        self.vaults[alliance].levitate.play()
-
-    def boost(self, alliance):
-        self.vaults[alliance].boost.play()
 
 
 if __name__ == "__main__":
