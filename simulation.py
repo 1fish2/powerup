@@ -3,11 +3,11 @@
 """
 FRC PowerUp game score simulation.
 
-TODO: More Robot and human player behaviors;
-More scoring: parked/climbed, ...;
-Power-ups {red, blue} x {force, levitate, boost} {unused, queued, played};
-Ranking points: 2 for win, 1 for tie, +1 for 3-robot climb, +1 for auto-quest
-(3 auto-runs AND own your Switch).
+TODO: More Robot and human player behaviors.
+TODO: More scoring: parked/climbed, ...
+TODO: Finish implementing Power-ups; {unused, queued, played}.
+TODO: Ranking points: 2 for win, 1 for tie, +1 for 3-robot climb, +1 for
+auto-quest (3 auto-runs AND own your Switch).
 
 TODO: Split this file into framework simulation.py, agents, and game.py.
 """
@@ -287,7 +287,7 @@ class Robot(Agent):
 
     def csv_header(self):
         name = self.name
-        # TODO: Add climbed/parked.
+        # TODO: Show Climbed/Parked.
         return [name + ' Location', name + ' Cubes', name + ' Action']
 
     def csv_row(self):
@@ -524,7 +524,7 @@ class Scale(Agent):
         return "{} with {} Cube(s)".format(self.name, self.cubes)
 
     def csv_header(self):
-        # TODO: Add forced and boosted state.
+        # TODO: Show Forced and Boosted state.
         name = self.name
         return [name + ' Owner', name + ' (front, back) Cubes']
 
@@ -666,7 +666,7 @@ class VaultColumn(object):
         """Play this power-up."""
         if self.action == "levitate":
             if self.cubes == 3:
-                # TODO: Implement.
+                # TODO: Implement levitate scoring.
                 pass
         else:
             # TODO: Queueing, one-shot, and no-op cases.
@@ -761,8 +761,8 @@ def robot_player(robot):
         drive_to("{}_EXCHANGE_ZONE", alliance)
         yield "to Exchange"
 
-        robot.drop()
-        yield "put a Cube into the Exchange"
+        robot.place()
+        yield "place a Cube into the Exchange"
 
         drive_to("{}_OUTER_ZONE", alliance)
         yield "auto-run"
@@ -787,7 +787,7 @@ def human_player(human):
     The actions depend on player position.
     """
     def player():
-        # TODO: ...
+        # TODO: Human player behaviors...
         while True:
             yield "done"
 
