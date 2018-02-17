@@ -3,19 +3,13 @@
 """
 FRC PowerUp game score simulation.
 
-TODO: Human player actions (Cubes and power-ups), more Robot and human
-player behaviors;
+TODO: More Robot and human player behaviors;
 More scoring: parked/climbed, ...;
 Power-ups {red, blue} x {force, levitate, boost} {unused, queued, played};
-Portals;
 Ranking points: 2 for win, 1 for tie, +1 for 3-robot climb, +1 for auto-quest
-(3 auto-runs AND own your switch).
-Enforce more rules?
+(3 auto-runs AND own your Switch).
 
-Example robot actions: "scoring in switch", "getting cube from left portal",
-"going to climb", "climbing".
-
-Split this file into framework simulation.py, agents, and game.py.
+TODO: Split this file into framework simulation.py, agents, and game.py.
 """
 
 from collections import namedtuple
@@ -54,14 +48,21 @@ SWITCH_FRONT_COLOR, SCALE_FRONT_COLOR = BLUE, RED
 
 ScoreFactor = Enum('ScoreFactor', 'NOT_YET ACHIEVED COUNTED')
 
-# Robot locations. Cubes can also be in these locations and in Robots,
-# Switch plates, Scale plates, and Vault columns, but not *_PLATFORM_CLIMBED.
-# The Scoring Table is at the "back side."
-# The red/blue "outer zone" is between the alliance wall and the auto-line.
+# Robot Locations.
+#
+# Cubes can be:
+#   in these Locations except *_PLATFORM_CLIMBED,
+#   in Robots,
+#   on Switch Plates,
+#   on Scale Plates,
+#   in Vault Columns,
+#   [TODO: Exchange input and output],
+#   with Human players.
+#
+# The Scoring Table is at the 'BACK'.
+# The RED/BLUE "outer zone" is between the Alliance wall and the auto-line.
 #
 # TODO: Split these zones finer, esp. front/back outer zone?
-# TODO: Add Alliance Station Locations to put exchanged Cubes waiting to
-# go into the Vault or back into the Exchange?
 Location = Enum(
     'Location',
     'RED_EXCHANGE_ZONE BLUE_EXCHANGE_ZONE '
