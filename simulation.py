@@ -553,7 +553,7 @@ class Scale(Agent):
 
     def force(self, alliance, is_start):
         """
-        Start/stop an alliance Force Power-up, stopping any Boost Power-up.
+        Start/end an alliance Force Power-up, stopping any Boost Power-up.
         The caller handles timing and queuing across all Switches/Scales.
 
         NOTE: VaultColumn.activate() relies on this method selector name and signature.
@@ -565,7 +565,7 @@ class Scale(Agent):
 
     def boost(self, alliance, is_start):
         """
-        Start/stop an alliance Boost Power-up, stopping any Force Power-up.
+        Start/end an alliance Boost Power-up, stopping any Force Power-up.
         The caller handles timing and queuing across all Switches/Scales.
 
         NOTE: VaultColumn.activate() relies on this method selector name and signature.
@@ -619,15 +619,15 @@ class Switch(Scale):
         location_by_pattern("{}_BACK_INNER_ZONE", self.alliance_end
                             ).adjacent_plate = self.back_plate
 
-    def force(self, alliance):
-        """Start an alliance Force; no-op if this isn't the alliance's Switch."""
+    def force(self, alliance, is_start):
+        """Start/end an alliance Force; no-op if this isn't the alliance's Switch."""
         if alliance is self.alliance_end:
-            super(Switch, self).force(alliance)
+            super(Switch, self).force(alliance, is_start)
 
-    def boost(self, alliance):
-        """Start an alliance Boost; no-op if this isn't the alliance's Switch."""
+    def boost(self, alliance, is_start):
+        """Start/end an alliance Boost; no-op if this isn't the alliance's Switch."""
         if alliance is self.alliance_end:
-            super(Switch, self).boost(alliance)
+            super(Switch, self).boost(alliance, is_start)
 
     def owner(self):
         o = super(Switch, self).owner()
