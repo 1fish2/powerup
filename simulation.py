@@ -3,9 +3,8 @@
 """
 FRC PowerUp game score simulation.
 
-TODO: More Robot and human player behaviors.
-TODO: More scoring: parked/climbed, ...
-TODO: Finish implementing Power-ups; {unused, queued, played}.
+TODO: More robot_player and human_player behaviors.
+TODO: Score parked/climbed Robots.
 TODO: Ranking points: 2 for win, 1 for tie, +1 for 3-robot climb, +1 for
 auto-quest (3 auto-runs AND own your Switch).
 
@@ -21,8 +20,7 @@ AUTONOMOUS_SECS = 15
 TELEOP_SECS = 2 * 60 + 15
 GAME_SECS = AUTONOMOUS_SECS + TELEOP_SECS
 ENDGAME_SECS = 30
-BOOST_SECS = 10
-FORCE_SECS = 10
+POWER_UP_SECS = 10
 
 CROSS_LINE_AUTO_POINTS = 5
 GAIN_SWITCH_AUTO_POINTS = 2
@@ -184,10 +182,14 @@ class Agent(object):
     def update(self, time):
         """Called once per time step to update this Agent."""
         if time == self.eta:
+            action = self.scheduled_action
             self.eta = None
-            self.scheduled_action()
             self.scheduled_action = None
             self.scheduled_action_description = ''
+
+            # Run action() and scheduled_action_done() AFTER updating
+            # state in case one of them schedules another action.
+            action()
             self.scheduled_action_done()
 
     def score(self):
@@ -433,6 +435,11 @@ class Human(Agent):
         self.player = generator
         self.scheduled_action_done()
 
+    @property
+    def vault_cubes(self):
+        """The number of Cubes in my (force, levitate, boost) Vault columns."""
+        return self.vault.cubes
+
     def get_from_exchange(self):
         """Get a Cube from the Exchange Plate."""
         def finish():
@@ -460,9 +467,9 @@ class Human(Agent):
                 self.cubes -= 1
                 self.vault.column_map[column_name].add_cube(1)
 
-        self.schedule_action(6, finish, 'put to Vault')
+        self.schedule_action(6, finish, 'put to {} Vault'.format(column_name))
 
-    def put_through_portal(self, column_name):
+    def put_through_portal(self):
         """Put a Cube through the Portal onto the field."""
         def finish():
             if self.cubes > 0:
@@ -471,7 +478,14 @@ class Human(Agent):
 
         self.schedule_action(3, finish, 'put through Portal')
 
-    # TODO: An action to push Power-up buttons.
+    def activate_power_up(self, column_name):
+        """Push a Power-up button on a Vault column to try to Activate it."""
+        def finish():
+            self.vault.column_map[column_name].activate()
+
+        # The delay models the average time for the Human player to get
+        # to the Vault, check the lights and Cubes, and push a button.
+        self.schedule_action(3, finish, 'activate {} Power-up'.format(column_name))
 
 
 class Plate(object):
@@ -489,18 +503,19 @@ class Plate(object):
 
 class Scale(Agent):
     """A Scale, also the base class for Switch."""
-    def __init__(self, front_color, alliance_end=''):
+    def __init__(self, power_up_queue, front_color, alliance_end=''):
         """
         :param front_color: RED or BLUE, selected by the FMS
         """
         super(Scale, self).__init__()
+        self.power_up_queue = power_up_queue
         self.alliance_end = alliance_end
         self.front_color = front_color
         self.front_plate = Plate(self._plate_name("Front"))
         self.back_plate = Plate(self._plate_name("Back"))
 
-        self.forced, self.force_alliance = False, ''
-        self.boosted, self.boost_alliance = False, ''
+        self.forced, self.force_alliance = (False, '')
+        self.boosted, self.boost_alliance = (False, '')
         self.previous_owner = ''
 
         self._setup_locations()
@@ -526,7 +541,7 @@ class Scale(Agent):
     def csv_header(self):
         # TODO: Show Forced and Boosted state.
         name = self.name
-        return [name + ' Owner', name + ' (front, back) Cubes']
+        return [name + ' Owner', name + ' (Front, Back) Cubes']
 
     def csv_row(self):
         return [self.owner(), self.cubes]
@@ -536,37 +551,29 @@ class Scale(Agent):
         """Returns (# front Plate Cubes, # back Plate Cubes)."""
         return self.front_plate.cubes, self.back_plate.cubes
 
-    def force(self, alliance):
+    def force(self, alliance, is_start):
         """
-        Start an alliance Force power-up, cancelling any previous Force or Boost.
-        NOTE: VaultColumn.play() relies on this method selector name and signature.
-        NOTE: This could queue a second Force/Boost operation but that needs to
-        work across all Switches and Scales.
-        """
-        def finish():
-            self.forced, self.force_alliance = False, ''
+        Start/stop an alliance Force Power-up, stopping any Boost Power-up.
+        The caller handles timing and queuing across all Switches/Scales.
 
+        NOTE: VaultColumn.activate() relies on this method selector name and signature.
+        """
         if self.autonomous:
             raise RuntimeError("Can't Force during autonomous")
-        self.forced, self.force_alliance = True, alliance
-        self.boosted, self.boost_alliance = False, ''
-        self.schedule_action(FORCE_SECS, finish, 'force')
+        self.forced, self.force_alliance = (True, alliance) if is_start else (False, '')
+        self.boosted, self.boost_alliance = (False, '')
 
-    def boost(self, alliance):
+    def boost(self, alliance, is_start):
         """
-        Start an alliance Boost power-up, cancelling any previous Force or Boost.
-        NOTE: VaultColumn.play() relies on this method selector name and signature.
-        NOTE: This could queue a second Force/Boost operation but that needs to
-        work across all Switches and Scales.
-        """
-        def finish():
-            self.boosted, self.boost_alliance = False, ''
+        Start/stop an alliance Boost Power-up, stopping any Force Power-up.
+        The caller handles timing and queuing across all Switches/Scales.
 
+        NOTE: VaultColumn.activate() relies on this method selector name and signature.
+        """
         if self.autonomous:
             raise RuntimeError("Can't Boost during autonomous")
-        self.boosted, self.boost_alliance = True, alliance
-        self.forced, self.force_alliance = False, ''
-        self.schedule_action(BOOST_SECS, finish, 'boost')
+        self.boosted, self.boost_alliance = (True, alliance) if is_start else (False, '')
+        self.forced, self.force_alliance = (False, '')
 
     def owner(self):
         """
@@ -593,12 +600,13 @@ class Scale(Agent):
 
 class Switch(Scale):
     """A Switch."""
-    def __init__(self, front_color, alliance_end):
+    def __init__(self, power_up_queue, front_color, alliance_end):
         """
         :param alliance_end: RED or BLUE end of the field
         :param front_color: RED or BLUE, selected by the FMS
         """
-        super(Switch, self).__init__(front_color, alliance_end)
+        super(Switch, self).__init__(power_up_queue, front_color, alliance_end)
+        self.active_power_up = None  # interlock between Force and Boost Power-Ups
 
     def _plate_name(self, front_back):
         """Return a string like 'Front RED Switch' to make 'Front RED Switch Plate'."""
@@ -626,6 +634,34 @@ class Switch(Scale):
         return o if o is self.alliance_end else ''
 
 
+class PowerUpQueue(Agent):
+    """The FMS queue of Switch/Scale Power-Ups."""
+    def __init__(self):
+        super(PowerUpQueue, self).__init__()
+        self.queue = []  # queue[0] is the current action
+
+    def _start_current_action(self):
+        """Start the current action and schedule to end it and revisit the queue."""
+        self.queue[0](True)
+        self.schedule_action(POWER_UP_SECS, lambda: (), 'dequeue')
+
+    def run_or_enqueue(self, power_up_action):
+        """
+        Run or enqueue the Power-Up action.
+        power_up_action(True) starts the action; power_up_action(False) ends it.
+        """
+        idle = not self.queue
+        self.queue.append(power_up_action)
+        if idle:
+            self._start_current_action()
+
+    def scheduled_action_done(self):
+        """End the current action and revisit the queue."""
+        self.queue.pop(0)(False)
+        if self.queue:
+            self._start_current_action()
+
+
 class VaultColumn(object):
     def __init__(self, alliance, action, switch, scale):
         """
@@ -639,39 +675,69 @@ class VaultColumn(object):
 
         self._cubes = 0
         self.previous_cubes = 0
+        self.played = False
+
+    @property
+    def name(self):
+        return "{} {} VaultColumn".format(self.alliance, self.action)
 
     @property
     def cubes(self):
         return self._cubes
 
     def __str__(self):
-        return "VaultColumn({} {}) with {} Cubes".format(
-            self.alliance, self.action, self._cubes)
+        return "{} with {} Cubes".format(self.name, self.cubes)
 
     def add_cube(self, cubes):
         # type: (int) -> int
-        """Adds the given number of Cubes. Returns the new count."""
+        """Add the given number of Cubes. Return the new count."""
         if cubes < 0:
-            raise RuntimeError("Can't remove {} cubes from {}".format(-cubes, self))
-        if self._cubes + cubes > 3:
-            raise RuntimeError("{} can't hold {} more cubes".format(self, cubes))
-        self._cubes += cubes
-        return self._cubes
+            raise RuntimeError("Can't remove Cubes from {}".format(self.name))
+
+        total = self._cubes + cubes
+        if total > 3:
+            raise RuntimeError("{} can't hold {} Cubes".format(self.name, total))
+
+        self._cubes = total
+        return total
 
     def selected(self):
-        """Returns a tuple of the seesaws selected by the current number of cubes."""
+        """Returns a tuple of the seesaws selected by the current number of Cubes."""
         return ((), (self.switch,), (self.scale,), (self.switch, self.scale))[self._cubes]
 
-    def play(self):
-        """Play this power-up."""
-        if self.action == "levitate":
+    def activate(self):
+        """
+        Activate this Power-Up if possible. Return True if the Power-Up
+        started or queued; False if nothing happened because it was already
+        played, a competing Power-Up is active, need more Cubes, etc.
+        """
+        if self.played:
+            return False
+
+        if self.action == 'levitate':
             if self.cubes == 3:
                 # TODO: Implement levitate scoring.
-                pass
-        else:
-            # TODO: Queueing, one-shot, and no-op cases.
-            for seesaw in self.selected():
-                getattr(seesaw, self.action)(self.alliance)
+                self.played = True
+                return True
+            return False
+
+        if self.cubes > 0 and not self.switch.active_power_up:
+            self.played = True
+            self.switch.active_power_up = self.action
+
+            # ASSUMES: The number of Cubes in the Vault column counts when the
+            # button is pushed, not when the queued action begins.
+            selected_seesaws = self.selected()
+
+            def power_up_action(is_start):
+                for seesaw in selected_seesaws:
+                    getattr(seesaw, self.action)(self.alliance, is_start)
+                if not is_start:
+                    self.switch.active_power_up = None
+            self.switch.power_up_queue.run_or_enqueue(power_up_action)
+            return True
+
+        return False
 
     def score(self):
         score = Score.pick(self.alliance, 5 * (self._cubes - self.previous_cubes))
@@ -695,6 +761,7 @@ class Vault(Agent):
 
     @property
     def cubes(self):
+        """The number of Cubes in the (force, levitate, boost) Vault columns."""
         return tuple(column.cubes for column in self.columns)
 
     def __str__(self):
@@ -702,7 +769,7 @@ class Vault(Agent):
 
     def csv_header(self):
         name = self.name
-        return [name + ' Cubes']
+        return [name + ' (Force, Levitate, Boost) Cubes']
 
     def csv_row(self):
         return [self.cubes]
@@ -799,13 +866,15 @@ class PowerUpGame(Simulation):
         super(PowerUpGame, self).__init__()
 
         # Create and add all the game objects.
+        self.power_up_queue = pq = PowerUpQueue()
+
         self.robots = [Robot(alliance, position)
                        for alliance in ALLIANCES
                        for position in xrange(1, 4)]
 
-        self.red_switch = Switch(SWITCH_FRONT_COLOR, RED)
-        self.blue_switch = Switch(SWITCH_FRONT_COLOR, BLUE)
-        self.scale = Scale(SCALE_FRONT_COLOR)
+        self.red_switch = Switch(pq, SWITCH_FRONT_COLOR, RED)
+        self.blue_switch = Switch(pq, SWITCH_FRONT_COLOR, BLUE)
+        self.scale = Scale(pq, SCALE_FRONT_COLOR)
         self.switches = {RED: self.red_switch, BLUE: self.blue_switch}
         self.seesaws = [self.red_switch, self.blue_switch, self.scale]
 
@@ -821,7 +890,7 @@ class PowerUpGame(Simulation):
 
         # The order affects update() order and CSV column order.
         for agent in itertools.chain(
-                self.robots, self.humans, self.seesaws, self.vaults):
+                self.robots, self.humans, self.seesaws, self.vaults, [pq]):
             self.add(agent)
 
         # Start keeping score.
