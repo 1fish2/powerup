@@ -4,7 +4,6 @@
 FRC PowerUp game score simulation.
 
 TODO: More robot_player and human_player behaviors.
-TODO: Score parked/climbed Robots.
 TODO: Ranking points: 2 for win, 1 for tie, +1 for 3-robot climb, +1 for
 auto-quest (3 auto-runs AND own your Switch).
 
@@ -199,6 +198,10 @@ class Agent(object):
         """
         return Score.ZERO
 
+    def endgame_score(self):
+        """Returns the Score earned for actions completed at game end."""
+        return Score.ZERO
+
     def csv_header(self):
         """Return a list of 0 or more CSV header column name strings."""
         return []
@@ -276,6 +279,7 @@ class Robot(Agent):
             location = Location.RED_OUTER_ZONE if alliance is RED else Location.BLUE_OUTER_ZONE
         self.location = location
         self.cubes = 0
+        self.climbed = False
         self.auto_run = ScoreFactor.NOT_YET
         self.player = itertools.repeat("--")  # a no-op generator
 
@@ -287,13 +291,20 @@ class Robot(Agent):
         # TODO: Include the current action and destination.
         return "{} in {} with {} Cube(s)".format(self.name, self.location, self.cubes)
 
+    @property
+    def is_at_platform(self):
+        """True if the Robot is on (Parked) or above (Climbed) its Platform."""
+        platform = location_by_pattern('{}_PLATFORM', self.alliance)
+        return self.location is platform
+
     def csv_header(self):
         name = self.name
-        # TODO: Show Climbed/Parked.
-        return [name + ' Location', name + ' Cubes', name + ' Action']
+        return [name + ' Location', name + ' Cubes', name + ' Action',
+                name + ' Climbed']
 
     def csv_row(self):
-        return [self.location.name, self.cubes, str(self.scheduled_action_description)]
+        return [self.location.name, self.cubes, str(self.scheduled_action_description),
+                'Climbed' if self.climbed else '']
 
     def score(self):
         if self.auto_run is ScoreFactor.ACHIEVED:
@@ -301,8 +312,12 @@ class Robot(Agent):
             self.auto_run = ScoreFactor.COUNTED
         else:
             points = Score.ZERO
-        # TODO: Add Parking or Climbing points.
         return points
+
+    def endgame_score(self):
+        return Score.pick(
+            self.alliance,
+            30 if self.climbed else 5 if self.is_at_platform else 0)
 
     def scheduled_action_done(self):
         """A scheduled action completed so start the next one."""
@@ -324,6 +339,9 @@ class Robot(Agent):
         replacing any current action. Does no path planning -- raises
         KeyError if the destination is not adjacent.
         """
+        if self.climbed:
+            return  # Can't drive now.
+
         if isinstance(destination, str):
             destination = Location[destination]
 
@@ -371,6 +389,15 @@ class Robot(Agent):
                 self.cubes -= 1
 
         self.schedule_action(1, finish, 'place')
+
+    def climb(self):
+        """If possible, climb the Scale, canceling driving or any other action."""
+        def finish():
+            if self.is_at_platform:
+                self.climbed = True
+
+        if self.is_at_platform:
+            self.schedule_action(4, finish, 'climb')
 
 
 class Human(Agent):
@@ -607,6 +634,7 @@ class Switch(Scale):
         """
         super(Switch, self).__init__(power_up_queue, front_color, alliance_end)
         self.active_power_up = None  # interlock between Force and Boost Power-Ups
+        self.levitate_activated = False
 
     def _plate_name(self, front_back):
         """Return a string like 'Front RED Switch' to make 'Front RED Switch Plate'."""
@@ -716,7 +744,7 @@ class VaultColumn(object):
 
         if self.action == 'levitate':
             if self.cubes == 3:
-                # TODO: Implement levitate scoring.
+                self.switch.levitate_activated = True
                 self.played = True
                 return True
             return False
@@ -914,6 +942,17 @@ class PowerUpGame(Simulation):
         super(PowerUpGame, self).tick()
         self.score = sum((agent.score() for agent in self.agents), self.score)
 
+    def endgame_score(self):
+        # Credit Levitate Power-Ups to (preferably) Robots that didn't climb or park.
+        for switch in self.switches.values():
+            if switch.levitate_activated:
+                alliance = switch.alliance_end
+                robots = [r for r in self.robots if r.alliance is alliance]
+                best = sorted(robots, key=lambda r: r.climbed * 2 + r.is_at_platform)
+                best[0].climbed = True
+
+        return sum((agent.endgame_score() for agent in self.agents), Score.ZERO)
+
     def csv_header(self):
         """Return a list of 0 or more CSV header column name strings."""
         return ['Time', 'Score']
@@ -934,7 +973,12 @@ class PowerUpGame(Simulation):
             row = sum((c.csv_row() for c in csv_contributors), [])
             csv_writer.writerow(row)
 
-        print "*** Final score: {} ***".format(self.score)
+        endgame_score = self.endgame_score()
+        self.score += endgame_score
+        csv_writer.writerow(('Final', self.score))
+
+        print "*** Final {} including endgame {}. ***".format(
+            self.score, endgame_score)
         print
 
 
