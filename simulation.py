@@ -8,6 +8,7 @@ TODO: Ranking points: 2 for win, 1 for tie, +1 for 3-robot climb, +1 for
 auto-quest (3 auto-runs AND own your Switch).
 
 TODO: Split this file into framework simulation.py, agents, and game.py.
+TODO: Unit tests.
 """
 
 from collections import namedtuple
@@ -210,6 +211,14 @@ class Agent(object):
         """Return a list of 0 or more CSV values corresponding to csv_header()."""
         return []
 
+    def csv_end_header(self):
+        """Endgame list of 0 or more CSV header column name strings."""
+        return []
+
+    def csv_end_row(self):
+        """Endgame list of 0 or more CSV values corresponding to csv_end_header()."""
+        return []
+
     def schedule_action(self, seconds, action, description):
         """
         Schedule a callable action to perform seconds from now, replacing any
@@ -279,7 +288,7 @@ class Robot(Agent):
             location = Location.RED_OUTER_ZONE if alliance is RED else Location.BLUE_OUTER_ZONE
         self.location = location
         self.cubes = 0
-        self.climbed = False
+        self.climbed = ''  # one of {'', 'Climbed', 'Levitated'}
         self.auto_run = ScoreFactor.NOT_YET
         self.player = itertools.repeat("--")  # a no-op generator
 
@@ -288,23 +297,27 @@ class Robot(Agent):
         return "{}{} Robot".format(self.alliance, self.team_position)
 
     def __str__(self):
-        # TODO: Include the current action and destination.
         return "{} in {} with {} Cube(s)".format(self.name, self.location, self.cubes)
 
     @property
-    def is_at_platform(self):
+    def at_platform(self):
         """True if the Robot is on (Parked) or above (Climbed) its Platform."""
         platform = location_by_pattern('{}_PLATFORM', self.alliance)
         return self.location is platform
 
     def csv_header(self):
         name = self.name
-        return [name + ' Location', name + ' Cubes', name + ' Action',
-                name + ' Climbed']
+        return [name + ' Location', name + ' Cubes', name + ' Action']
 
     def csv_row(self):
-        return [self.location.name, self.cubes, str(self.scheduled_action_description),
-                'Climbed' if self.climbed else '']
+        return [self.location.name, self.cubes, str(self.scheduled_action_description)]
+
+    def csv_end_header(self):
+        name = self.name
+        return [name + ' Endgame']
+
+    def csv_end_row(self):
+        return [self.climbed]
 
     def score(self):
         if self.auto_run is ScoreFactor.ACHIEVED:
@@ -317,7 +330,7 @@ class Robot(Agent):
     def endgame_score(self):
         return Score.pick(
             self.alliance,
-            30 if self.climbed else 5 if self.is_at_platform else 0)
+            30 if self.climbed else 5 if self.at_platform else 0)
 
     def scheduled_action_done(self):
         """A scheduled action completed so start the next one."""
@@ -336,7 +349,8 @@ class Robot(Agent):
     def drive_to(self, destination):
         """
         Begin driving to the destination Location or Location name,
-        replacing any current action. Does no path planning -- raises
+        replacing any current action. Does no p
+        ath planning -- raises
         KeyError if the destination is not adjacent.
         """
         if self.climbed:
@@ -393,10 +407,10 @@ class Robot(Agent):
     def climb(self):
         """If possible, climb the Scale, canceling driving or any other action."""
         def finish():
-            if self.is_at_platform:
-                self.climbed = True
+            if self.at_platform:
+                self.climbed = 'Climbed'
 
-        if self.is_at_platform:
+        if self.at_platform:
             self.schedule_action(4, finish, 'climb')
 
 
@@ -562,16 +576,20 @@ class Scale(Agent):
         return "{}{}{} front:{}".format(
             self.alliance_end, spacer, typename(self), self.front_color)
 
+    @property
+    def power_up_state(self):
+        return '{}/{}'.format('Forced' if self.forced else '',
+                              'Boosted' if self.boosted else '')
+
     def __str__(self):
         return "{} with {} Cube(s)".format(self.name, self.cubes)
 
     def csv_header(self):
-        # TODO: Show Forced and Boosted state.
         name = self.name
-        return [name + ' Owner', name + ' (Front, Back) Cubes']
+        return [name + ' Owner', name + ' (Front, Back) Cubes', name + ' Power-Ups']
 
     def csv_row(self):
-        return [self.owner(), self.cubes]
+        return [self.owner(), self.cubes, self.power_up_state]
 
     @property
     def cubes(self):
@@ -948,18 +966,22 @@ class PowerUpGame(Simulation):
             if switch.levitate_activated:
                 alliance = switch.alliance_end
                 robots = [r for r in self.robots if r.alliance is alliance]
-                best = sorted(robots, key=lambda r: r.climbed * 2 + r.is_at_platform)
-                best[0].climbed = True
+                picks = sorted(robots, key=lambda r: bool(r.climbed) * 2 + r.at_platform)
+                picks[0].climbed = 'Levitated'
 
         return sum((agent.endgame_score() for agent in self.agents), Score.ZERO)
 
     def csv_header(self):
-        """Return a list of 0 or more CSV header column name strings."""
         return ['Time', 'Score']
 
     def csv_row(self):
-        """Return a list of 0 or more CSV values corresponding to csv_header()."""
         return [self.time, self.score]
+
+    def csv_end_header(self):
+        return ['', 'Score']
+
+    def csv_end_row(self):
+        return ['Final', self.score]
 
     def play(self, csv_writer):
         """Play out the simulated game."""
@@ -973,12 +995,15 @@ class PowerUpGame(Simulation):
             row = sum((c.csv_row() for c in csv_contributors), [])
             csv_writer.writerow(row)
 
-        endgame_score = self.endgame_score()
-        self.score += endgame_score
-        csv_writer.writerow(('Final', self.score))
+        self.score += self.endgame_score()
+        csv_writer.writerow(())
 
-        print "*** Final {} including endgame {}. ***".format(
-            self.score, endgame_score)
+        header = sum((c.csv_end_header() for c in csv_contributors), [])
+        csv_writer.writerow(header)
+        row = sum((c.csv_end_row() for c in csv_contributors), [])
+        csv_writer.writerow(row)
+
+        print "*** Final {}. ***".format(self.score)
         print
 
 
