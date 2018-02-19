@@ -4,9 +4,6 @@
 FRC PowerUp game score simulation.
 
 TODO: More robot_player and human_player behaviors.
-TODO: Ranking points: 2 for win, 1 for tie, +1 for 3-robot climb, +1 for
-auto-quest (3 auto-runs AND own your Switch).
-
 TODO: Split this file into framework simulation.py, agents, and game.py.
 TODO: Unit tests.
 """
@@ -149,12 +146,18 @@ class Score(namedtuple('Score', 'red blue')):
 
     @classmethod
     def pick(cls, color, value):
-        """Returns a Score where RED or BLUE or neither gets the given value."""
+        """Return a Score where RED or BLUE or neither gets the given value."""
         return cls(value if color is RED else 0, value if color is BLUE else 0)
 
     def __add__(self, other):
-        """Adds two Score values. Useful with sum([scores...], Score.ZERO)."""
-        return type(self)(self.red + other.red, self.blue + other.blue)
+        """Add two Score values. Useful with sum([scores...], Score.ZERO)."""
+        return Score(self.red + other.red, self.blue + other.blue)
+
+    def wlt_rp(self):
+        """Return the Win-Loss-Tie Ranking Point Score for this final point Score."""
+        # __cmp__() returns {-1, 0, 1} for {loss, tie, win}. +1 -> {0, 1, 2}.
+        red_points = self.red.__cmp__(self.blue) + 1
+        return Score(red_points, 2 - red_points)
 
 
 Score.ZERO = Score(0, 0)
@@ -544,13 +547,13 @@ class Plate(object):
 
 class Scale(Agent):
     """A Scale, also the base class for Switch."""
-    def __init__(self, power_up_queue, front_color, alliance_end=''):
+    def __init__(self, power_up_queue, front_color, alliance=''):
         """
         :param front_color: RED or BLUE, selected by the FMS
         """
         super(Scale, self).__init__()
         self.power_up_queue = power_up_queue
-        self.alliance_end = alliance_end
+        self.alliance = alliance
         self.front_color = front_color
         self.front_plate = Plate(self._plate_name("Front"))
         self.back_plate = Plate(self._plate_name("Back"))
@@ -572,9 +575,9 @@ class Scale(Agent):
 
     @property
     def name(self):
-        spacer = ' ' if self.alliance_end else ''
+        spacer = ' ' if self.alliance else ''
         return "{}{}{} front:{}".format(
-            self.alliance_end, spacer, typename(self), self.front_color)
+            self.alliance, spacer, typename(self), self.front_color)
 
     @property
     def power_up_state(self):
@@ -645,39 +648,39 @@ class Scale(Agent):
 
 class Switch(Scale):
     """A Switch."""
-    def __init__(self, power_up_queue, front_color, alliance_end):
+    def __init__(self, power_up_queue, front_color, alliance):
         """
-        :param alliance_end: RED or BLUE end of the field
+        :param alliance: RED or BLUE end of the field
         :param front_color: RED or BLUE, selected by the FMS
         """
-        super(Switch, self).__init__(power_up_queue, front_color, alliance_end)
+        super(Switch, self).__init__(power_up_queue, front_color, alliance)
         self.active_power_up = None  # interlock between Force and Boost Power-Ups
         self.levitate_activated = False
 
     def _plate_name(self, front_back):
         """Return a string like 'Front RED Switch' to make 'Front RED Switch Plate'."""
-        return "{} {} {}".format(front_back, self.alliance_end, typename(self))
+        return "{} {} {}".format(front_back, self.alliance, typename(self))
 
     def _setup_locations(self):
         """Set up the adjacent Locations to refer to the Plates."""
-        location_by_pattern("{}_FRONT_INNER_ZONE", self.alliance_end
+        location_by_pattern("{}_FRONT_INNER_ZONE", self.alliance
                             ).adjacent_plate = self.front_plate
-        location_by_pattern("{}_BACK_INNER_ZONE", self.alliance_end
+        location_by_pattern("{}_BACK_INNER_ZONE", self.alliance
                             ).adjacent_plate = self.back_plate
 
     def force(self, alliance, is_start):
         """Start/end an alliance Force; no-op if this isn't the alliance's Switch."""
-        if alliance is self.alliance_end:
+        if alliance is self.alliance:
             super(Switch, self).force(alliance, is_start)
 
     def boost(self, alliance, is_start):
         """Start/end an alliance Boost; no-op if this isn't the alliance's Switch."""
-        if alliance is self.alliance_end:
+        if alliance is self.alliance:
             super(Switch, self).boost(alliance, is_start)
 
     def owner(self):
         o = super(Switch, self).owner()
-        return o if o is self.alliance_end else ''
+        return o if o is self.alliance else ''
 
 
 class PowerUpQueue(Agent):
@@ -907,6 +910,14 @@ def example_human_player(human):
     human.set_player(player())
 
 
+def partition_by_alliance(elements):
+    """Partition elements into a dict from alliance color to relevant elements."""
+    d = {}
+    for e in elements:
+        d.setdefault(e.alliance, []).append(e)
+    return d
+
+
 class PowerUpGame(Simulation):
     def __init__(self, robot_player, human_player):
         super(PowerUpGame, self).__init__()
@@ -917,6 +928,7 @@ class PowerUpGame(Simulation):
         self.robots = [Robot(alliance, position)
                        for alliance in ALLIANCES
                        for position in xrange(1, 4)]
+        self.robots_map = partition_by_alliance(self.robots)
 
         self.red_switch = Switch(pq, SWITCH_FRONT_COLOR, RED)
         self.blue_switch = Switch(pq, SWITCH_FRONT_COLOR, BLUE)
@@ -941,6 +953,7 @@ class PowerUpGame(Simulation):
 
         # Start keeping score.
         self.score = Score.ZERO
+        self.auto_switch_owners = Score.ZERO
 
         # Set up the players. Robots can preload Cubes.
         [robot_player(robot) for robot in self.robots]
@@ -957,19 +970,36 @@ class PowerUpGame(Simulation):
 
     def tick(self):
         """Advance time and update the running score."""
+        if self.time == AUTONOMOUS_SECS:
+            self.auto_switch_owners = Score(int(self.red_switch.owner() is RED),
+                                            int(self.blue_switch.owner() is BLUE))
+
         super(PowerUpGame, self).tick()
         self.score = sum((agent.score() for agent in self.agents), self.score)
 
     def endgame_score(self):
-        # Credit Levitate Power-Ups to (preferably) Robots that didn't climb or park.
+        """Credit Levitate Power-Ups then calculate endgame Score points."""
+        # Prefer to credit Robots that didn't climb or park.
         for switch in self.switches.values():
             if switch.levitate_activated:
-                alliance = switch.alliance_end
-                robots = [r for r in self.robots if r.alliance is alliance]
+                alliance = switch.alliance
+                robots = self.robots_map[alliance]
                 picks = sorted(robots, key=lambda r: bool(r.climbed) * 2 + r.at_platform)
                 picks[0].climbed = 'Levitated'
 
         return sum((agent.endgame_score() for agent in self.agents), Score.ZERO)
+
+    def face_the_boss_rp(self):
+        """Return a Ranking Point Score for Facing the Boss (3-robot climbs)."""
+        return Score(sum(bool(robot.climbed) for robot in self.robots_map[RED]) // 3,
+                     sum(bool(robot.climbed) for robot in self.robots_map[BLUE]) // 3)
+
+    def auto_quest_rp(self):
+        """Return a Ranking Point Score for the Auto-Quest (3 auto-runs + own Switch)."""
+        reds = sum(robot.auto_run == ScoreFactor.COUNTED for robot in self.robots_map[RED]) // 3
+        blues = sum(robot.auto_run == ScoreFactor.COUNTED for robot in self.robots_map[BLUE]) // 3
+        return Score(reds * self.auto_switch_owners.red,
+                     blues * self.auto_switch_owners.blue)
 
     def csv_header(self):
         return ['Time', 'Score']
@@ -978,7 +1008,7 @@ class PowerUpGame(Simulation):
         return [self.time, self.score]
 
     def csv_end_header(self):
-        return ['', 'Score']
+        return ['Time', 'Score']
 
     def csv_end_row(self):
         return ['Final', self.score]
@@ -990,20 +1020,32 @@ class PowerUpGame(Simulation):
         header = sum((c.csv_header() for c in csv_contributors), [])
         csv_writer.writerow(header)
 
+        # Play the match. Output CSV rows.
         for t in xrange(GAME_SECS):
             self.tick()
             row = sum((c.csv_row() for c in csv_contributors), [])
             csv_writer.writerow(row)
 
+        # Compute endgame points.
         self.score += self.endgame_score()
-        csv_writer.writerow(())
 
+        # Output another CSV section with endgame points.
+        csv_writer.writerow(())
         header = sum((c.csv_end_header() for c in csv_contributors), [])
         csv_writer.writerow(header)
         row = sum((c.csv_end_row() for c in csv_contributors), [])
         csv_writer.writerow(row)
 
-        print "*** Final {}. ***".format(self.score)
+        # Compute RPs. Output another CSV section.
+        wlt = self.score.wlt_rp()
+        faced_the_boss = self.face_the_boss_rp()
+        auto_quest = self.auto_quest_rp()
+        rp = wlt + faced_the_boss + auto_quest
+        csv_writer.writerow(())
+        csv_writer.writerow(('Time', 'WLT RPs', 'AUTO-QUEST RPs', 'BOSS RPs', 'TOTAL RPs'))
+        csv_writer.writerow(('Final', wlt, auto_quest, faced_the_boss, rp))
+
+        print "*** Final {}, Ranking Points {}. ***".format(self.score, rp)
         print
 
 
