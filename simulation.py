@@ -824,7 +824,7 @@ class Vault(Agent):
         return sum((column.score() for column in self.columns), Score.ZERO)
 
 
-def robot_player(robot):
+def example_robot_player(robot):
     """
     A Robot "game player" (decider) -- a generator that chooses behaviors
     like drive to a destination. The Robot yields to this generator each
@@ -890,7 +890,7 @@ def robot_player(robot):
     robot.set_player(generator)
 
 
-def human_player(human):
+def example_human_player(human):
     """
     A Human "game player" (decider) -- a generator that chooses behaviors
     like put Cube through Portal. The Human yields to this generator each
@@ -908,7 +908,7 @@ def human_player(human):
 
 
 class PowerUpGame(Simulation):
-    def __init__(self):
+    def __init__(self, robot_player, human_player):
         super(PowerUpGame, self).__init__()
 
         # Create and add all the game objects.
@@ -1010,5 +1010,6 @@ class PowerUpGame(Simulation):
 if __name__ == "__main__":
     with open('powerup-output.csv', 'wb') as f:
         writer = csv.writer(f)
-        game = PowerUpGame()
+        game = PowerUpGame(robot_player=example_robot_player,
+                           human_player=example_human_player)
         game.play(writer)
