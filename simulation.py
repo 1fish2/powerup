@@ -8,7 +8,7 @@ TODO: Split this file into framework simulation.py, agents, and game.py.
 TODO: Unit tests.
 """
 
-from collections import namedtuple
+from collections import namedtuple, OrderedDict
 import csv
 from enum import Enum  # PyPI enum34
 import itertools
@@ -246,7 +246,7 @@ class Simulation(object):
 
     def __init__(self):
         self.time = 0
-        self.agents = []
+        self.agents = OrderedDict()
 
     @property
     def autonomous(self):
@@ -256,7 +256,7 @@ class Simulation(object):
     def add(self, agent):
         """Add an Agent to this Simulation."""
         agent.simulation = self
-        self.agents.append(agent)
+        self.agents[agent.name] = agent
 
     def tick(self):
         """Advance time by 1 second, updating all Agents."""
@@ -265,7 +265,7 @@ class Simulation(object):
             raise GameOver()
         self.time = time
 
-        for agent in self.agents:
+        for agent in self.agents.itervalues():
             agent.update(time)
 
 
@@ -959,7 +959,8 @@ class PowerUpGame(Simulation):
                                             int(self.blue_switch.owner() is BLUE))
 
         super(PowerUpGame, self).tick()
-        self.score = sum((agent.score() for agent in self.agents), self.score)
+        self.score = sum((agent.score() for agent in self.agents.itervalues()),
+                         self.score)
 
     def endgame_score(self):
         """Credit Levitate Power-Ups then calculate endgame Score points."""
@@ -971,7 +972,8 @@ class PowerUpGame(Simulation):
                 picks = sorted(robots, key=lambda r: bool(r.climbed) * 2 + r.at_platform)
                 picks[0].climbed = 'Levitated'
 
-        return sum((agent.endgame_score() for agent in self.agents), Score.ZERO)
+        return sum((agent.endgame_score() for agent in self.agents.itervalues()),
+                   Score.ZERO)
 
     def face_the_boss_rp(self):
         """Return a Ranking Point Score for Facing the Boss (3-robot climbs)."""
@@ -1000,7 +1002,7 @@ class PowerUpGame(Simulation):
     def play(self, csv_writer):
         """Play out the simulated game."""
         # TODO: Include # Cubes at each Location in the CSV output?
-        csv_contributors = [self] + self.agents
+        csv_contributors = [self] + self.agents.values()
         header = sum((c.csv_header() for c in csv_contributors), [])
         csv_writer.writerow(header)
 
