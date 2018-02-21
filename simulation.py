@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-FRC PowerUp game score simulation.
+FRC (FIRST Robotics) PowerUp game score simulation.
 
 TODO: More robot_player and human_player behaviors.
 TODO: Split this file into framework simulation.py, agents, and game.py.
@@ -166,8 +166,9 @@ Score.ZERO = Score(0, 0)
 class Agent(object):
     """An Agent in a Simulation has time-based behaviors."""
 
-    def __init__(self):
+    def __init__(self, name):
         self.simulation = None
+        self.name = name
 
         self.eta = None  # when to perform scheduled_action
         self.scheduled_action = None  # a callable to perform at ETA
@@ -283,7 +284,7 @@ class Robot(Agent):
         :param team_position: 1, 2, or 3
         :param location: a Location (defaults to the alliance's outer zone)
         """
-        super(Robot, self).__init__()
+        super(Robot, self).__init__("{}{} Robot".format(alliance, team_position))
         self.alliance = alliance
         self.team_position = team_position
 
@@ -294,10 +295,6 @@ class Robot(Agent):
         self.climbed = ''  # one of {'', 'Climbed', 'Levitated'}
         self.auto_run = ScoreFactor.NOT_YET
         self.player = itertools.repeat("--")  # a no-op generator
-
-    @property
-    def name(self):
-        return "{}{} Robot".format(self.alliance, self.team_position)
 
     def __str__(self):
         return "{} in {} with {} Cube(s)".format(self.name, self.location, self.cubes)
@@ -434,7 +431,7 @@ class Human(Agent):
 
         position: 'FRONT', 'BACK', or 'STATION'.
         """
-        super(Human, self).__init__()
+        super(Human, self).__init__("{} {} Human".format(alliance, position))
         self.alliance = alliance
         self.position = position
 
@@ -449,10 +446,6 @@ class Human(Agent):
 
         self.cubes = 0  # PowerUpGame will preload Cubes for Portal Humans
         self.player = itertools.repeat("--")  # a no-op generator
-
-    @property
-    def name(self):
-        return "{} {} Human Player".format(self.alliance, self.position)
 
     def __str__(self):
         return "{} with {} Cube(s)".format(self.name, self.cubes)
@@ -551,7 +544,8 @@ class Scale(Agent):
         """
         :param front_color: RED or BLUE, selected by the FMS
         """
-        super(Scale, self).__init__()
+        super(Scale, self).__init__("{}{}{} front:{}".format(
+            alliance, ' ' if alliance else '', typename(self), front_color))
         self.power_up_queue = power_up_queue
         self.alliance = alliance
         self.front_color = front_color
@@ -572,12 +566,6 @@ class Scale(Agent):
         """Set the adjacent Locations to point to the Plates."""
         Location.FRONT_NULL_TERRITORY.adjacent_plate = self.front_plate
         Location.BACK_NULL_TERRITORY.adjacent_plate = self.back_plate
-
-    @property
-    def name(self):
-        spacer = ' ' if self.alliance else ''
-        return "{}{}{} front:{}".format(
-            self.alliance, spacer, typename(self), self.front_color)
 
     @property
     def power_up_state(self):
@@ -686,7 +674,7 @@ class Switch(Scale):
 class PowerUpQueue(Agent):
     """The FMS queue of Switch/Scale Power-Ups."""
     def __init__(self):
-        super(PowerUpQueue, self).__init__()
+        super(PowerUpQueue, self).__init__("PowerUpQueue")
         self.queue = []  # queue[0] is the current action
 
     def _start_current_action(self):
@@ -797,16 +785,12 @@ class VaultColumn(object):
 class Vault(Agent):
     """An alliance's Vault for power-ups."""
     def __init__(self, alliance, switch, scale):
-        super(Vault, self).__init__()
+        super(Vault, self).__init__("{} Vault".format(alliance))
         self.alliance = alliance
         self.columns = tuple(VaultColumn(alliance, action, switch, scale)
                              for action in ('force', 'levitate', 'boost'))
         self.column_map = {column.action: column for column in self.columns}
         self.switch, self.scale = switch, scale
-
-    @property
-    def name(self):
-        return "{} Vault".format(self.alliance)
 
     @property
     def cubes(self):
