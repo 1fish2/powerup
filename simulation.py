@@ -163,12 +163,26 @@ class Score(namedtuple('Score', 'red blue')):
 Score.ZERO = Score(0, 0)
 
 
-class Agent(object):
-    """An Agent in a Simulation has time-based behaviors."""
+def sep(value):
+    """Turn value into a string and append a separator space if needed."""
+    string = str(value)
+    return string + ' ' if string else ''
 
-    def __init__(self, name):
+
+class Agent(object):
+    """An Agent in a Simulation has time-based behaviors. Its name will
+    be formed like "RED 1 Robot", "BLUE STATION Human", or "RED Switch"
+    and be useful for lookups.
+    """
+    def __init__(self, alliance, position=''):
+        """
+        :param alliance: RED, BLUE, or ''
+        :param position: to distinguish, e.g. the RED Robots
+        """
+        self.alliance = alliance
+        self.position = position
+        self.name = "{}{}{}".format(sep(alliance), sep(position), typename(self))
         self.simulation = None
-        self.name = name
 
         self.eta = None  # when to perform scheduled_action
         self.scheduled_action = None  # a callable to perform at ETA
@@ -278,15 +292,8 @@ class Simulation(object):
 # release it if the action gets cancelled)?
 class Robot(Agent):
     """A Robot Agent, responsible for actions, not decisions."""
-    def __init__(self, alliance, team_position, location=None):
-        """
-        :param alliance: RED or BLUE
-        :param team_position: 1, 2, or 3
-        :param location: a Location (defaults to the alliance's outer zone)
-        """
-        super(Robot, self).__init__("{}{} Robot".format(alliance, team_position))
-        self.alliance = alliance
-        self.team_position = team_position
+    def __init__(self, alliance, position, location=None):
+        super(Robot, self).__init__(alliance, position)
 
         if location is None:
             location = Location.RED_OUTER_ZONE if alliance is RED else Location.BLUE_OUTER_ZONE
@@ -429,11 +436,9 @@ class Human(Agent):
         irrelevant to catch any buggy attempts for the wrong Human
         player to access them.)
 
-        position: 'FRONT', 'BACK', or 'STATION'.
+        :param position: 'FRONT', 'BACK', or 'STATION'.
         """
-        super(Human, self).__init__("{} {} Human".format(alliance, position))
-        self.alliance = alliance
-        self.position = position
+        super(Human, self).__init__(alliance, position)
 
         self.vault = self.exchange_plate = self.exchange_zone = self.portal = None
         if position == 'STATION':
@@ -544,10 +549,8 @@ class Scale(Agent):
         """
         :param front_color: RED or BLUE, selected by the FMS
         """
-        super(Scale, self).__init__("{}{}{} front:{}".format(
-            alliance, ' ' if alliance else '', typename(self), front_color))
+        super(Scale, self).__init__(alliance, '(front:{})'.format(front_color))
         self.power_up_queue = power_up_queue
-        self.alliance = alliance
         self.front_color = front_color
         self.front_plate = Plate(self._plate_name("Front"))
         self.back_plate = Plate(self._plate_name("Back"))
@@ -638,8 +641,8 @@ class Switch(Scale):
     """A Switch."""
     def __init__(self, power_up_queue, front_color, alliance):
         """
-        :param alliance: RED or BLUE end of the field
         :param front_color: RED or BLUE, selected by the FMS
+        :param alliance: RED or BLUE end of the field
         """
         super(Switch, self).__init__(power_up_queue, front_color, alliance)
         self.active_power_up = None  # interlock between Force and Boost Power-Ups
@@ -674,7 +677,7 @@ class Switch(Scale):
 class PowerUpQueue(Agent):
     """The FMS queue of Switch/Scale Power-Ups."""
     def __init__(self):
-        super(PowerUpQueue, self).__init__("PowerUpQueue")
+        super(PowerUpQueue, self).__init__('')
         self.queue = []  # queue[0] is the current action
 
     def _start_current_action(self):
@@ -785,8 +788,7 @@ class VaultColumn(object):
 class Vault(Agent):
     """An alliance's Vault for power-ups."""
     def __init__(self, alliance, switch, scale):
-        super(Vault, self).__init__("{} Vault".format(alliance))
-        self.alliance = alliance
+        super(Vault, self).__init__(alliance)
         self.columns = tuple(VaultColumn(alliance, action, switch, scale)
                              for action in ('force', 'levitate', 'boost'))
         self.column_map = {column.action: column for column in self.columns}
@@ -873,7 +875,7 @@ def example_robot_player(robot):
         while True:
             yield "done"
 
-    generator = {1: player1, 2: player2, 3: player3}[robot.team_position]()
+    generator = {1: player1, 2: player2, 3: player3}[robot.position]()
     robot.set_player(generator)
 
 
