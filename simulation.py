@@ -72,8 +72,8 @@ Location = Enum(
 TRAVEL_TIMES = dict()  # map (location1, location2) -> Robot travel time in seconds
 
 
-def location_by_pattern(pattern, *args):
-    """Lookup a Location by name pattern with substitution *args."""
+def find_location(pattern, *args):
+    """Find a Location by name pattern with substitution *args."""
     return Location[pattern.format(*args)]
 
 
@@ -84,11 +84,6 @@ def _init_locations():
     many seconds. Drive longer routes as a sequence of direct paths via
     intermediate Locations *OUTER_ZONE, *INNER_ZONE, *SWITCH_FENCE,
     *PLATFORM, *NULL_TERRITORY.
-
-    NOTE: An expedient approach here keeps simulation-specific state
-    .adjacent_plate and .cubes in Location properties. Call this again
-    to reset before re-running the simulation. A better approach would
-    store that state in dicts in the Simulation object.
     """
     def locate(location_name, color1):
         """
@@ -110,12 +105,6 @@ def _init_locations():
 
     for loc in Location:
         loc.is_inner_zone = loc.name.endswith('_INNER_ZONE')
-        loc.cubes = 0  # The number of cubes in this Location.
-        loc.adjacent_plate = None  # Adjacent seesaw Plate; set by seesaw __init__().
-
-    for alliance in ALLIANCES:
-        location_by_pattern('{}_SWITCH_FENCE', alliance).cubes = 6
-        location_by_pattern('{}_POWER_CUBE_ZONE', alliance).cubes = 10
 
     set_pairs('red_OUTER_ZONE', 'red_EXCHANGE_ZONE', 2)
     set_pairs('red_OUTER_ZONE', 'blue_FRONT_PORTAL', 5)
@@ -171,22 +160,24 @@ def sep(value):
 
 class Agent(object):
     """An Agent in a Simulation has time-based behaviors. Its name will
-    be formed like "RED 1 Robot", "BLUE STATION Human", or "RED Switch"
-    and be useful for lookups.
+    be formed like "RED 1 Robot" or "BLUE STATION Human" and be useful
+    for lookups.
     """
-    def __init__(self, alliance, position=''):
+    def __init__(self, simulation, alliance, position=''):
         """
         :param alliance: RED, BLUE, or ''
         :param position: to distinguish, e.g. the RED Robots
         """
+        self.simulation = simulation
         self.alliance = alliance
         self.position = position
         self.name = "{}{}{}".format(sep(alliance), sep(position), typename(self))
-        self.simulation = None
 
         self.eta = None  # when to perform scheduled_action
         self.scheduled_action = None  # a callable to perform at ETA
         self.scheduled_action_description = ''  # typically a method name
+
+        simulation.add(self)
 
     @property
     def time(self):
@@ -239,8 +230,8 @@ class Agent(object):
 
     def schedule_action(self, seconds, action, description):
         """
-        Schedule a callable action to perform seconds from now, replacing any
-        current scheduled action.
+        Schedule action() and self.scheduled_action_done() in `seconds`
+        from now, replacing any currently scheduled action.
         """
         self.eta = self.time + seconds
         self.scheduled_action = action
@@ -262,14 +253,27 @@ class Simulation(object):
         self.time = 0
         self.agents = OrderedDict()
 
+        self.cubes = {}  # map of Location -> # Cubes
+        self.plates = {}  # map of Location -> adjacent Plate to place() Cubes
+        for loc in Location:
+            cubes = 0
+            if loc.name.endswith('_SWITCH_FENCE'):  # initial Cubes on field
+                cubes = 6
+            elif loc.name.endswith('_POWER_CUBE_ZONE'):
+                cubes = 10
+            self.cubes[loc] = cubes
+            self.plates[loc] = None
+
     @property
     def autonomous(self):
         """Return True during the autonomous period."""
         return self.time < AUTONOMOUS_SECS
 
     def add(self, agent):
-        """Add an Agent to this Simulation."""
-        agent.simulation = self
+        """Add an Agent to this Simulation.
+        REQUIRES: agent.simulation and agent.name already set.
+        """
+        assert agent.simulation == self
         self.agents[agent.name] = agent
 
     def tick(self):
@@ -292,8 +296,8 @@ class Simulation(object):
 # release it if the action gets cancelled)?
 class Robot(Agent):
     """A Robot Agent, responsible for actions, not decisions."""
-    def __init__(self, alliance, position, location=None):
-        super(Robot, self).__init__(alliance, position)
+    def __init__(self, simulation, alliance, position, location=None):
+        super(Robot, self).__init__(simulation, alliance, position)
 
         if location is None:
             location = Location.RED_OUTER_ZONE if alliance is RED else Location.BLUE_OUTER_ZONE
@@ -309,7 +313,7 @@ class Robot(Agent):
     @property
     def at_platform(self):
         """True if the Robot is on (Parked) or above (Climbed) its Platform."""
-        platform = location_by_pattern('{}_PLATFORM', self.alliance)
+        platform = find_location('{}_PLATFORM', self.alliance)
         return self.location is platform
 
     def csv_header(self):
@@ -378,8 +382,8 @@ class Robot(Agent):
     def pickup(self):
         """If there's a Cube here and room in the Robot, pick it up."""
         def finish():
-            if self.location.cubes > 0 and self.cubes == 0:
-                self.location.cubes -= 1
+            if self.simulation.cubes[self.location] > 0 and self.cubes == 0:
+                self.simulation.cubes[self.location] -= 1
                 self.cubes += 1
 
         self.schedule_action(1, finish, 'pickup')
@@ -392,7 +396,7 @@ class Robot(Agent):
         """
         def finish():
             if self.cubes > 0:
-                self.location.cubes += 1
+                self.simulation.cubes[self.location] += 1
                 self.cubes -= 1
 
         self.schedule_action(1, finish, 'drop')
@@ -404,7 +408,7 @@ class Robot(Agent):
         TODO: Should the Exchange conveyor Plate support multiple Cubes?
         """
         def finish():
-            plate = self.location.adjacent_plate
+            plate = self.simulation.plates[self.location]
             if plate is not None and self.cubes > 0:
                 plate.cubes += 1
                 self.cubes -= 1
@@ -428,7 +432,7 @@ class Human(Agent):
     """
     # TODO: Model travel steps in the Alliance station? Currently the
     # Cube actions just include some average travel time.
-    def __init__(self, alliance, position, vault):
+    def __init__(self, simulation, alliance, position, vault):
         """
         A Human player in the Alliance STATION (with a Vault ref, an
         Exchange Location ref, and an Exchange Plate) or at a FRONT/BACK
@@ -438,16 +442,16 @@ class Human(Agent):
 
         :param position: 'FRONT', 'BACK', or 'STATION'.
         """
-        super(Human, self).__init__(alliance, position)
+        super(Human, self).__init__(simulation, alliance, position)
 
         self.vault = self.exchange_plate = self.exchange_zone = self.portal = None
         if position == 'STATION':
             self.vault = vault
             self.exchange_plate = Plate("{} Exchange Plate".format(alliance))
-            self.exchange_zone = location_by_pattern('{}_EXCHANGE_ZONE', alliance)
-            self.exchange_zone.adjacent_plate = self.exchange_plate
+            self.exchange_zone = find_location('{}_EXCHANGE_ZONE', alliance)
+            simulation.plates[self.exchange_zone] = self.exchange_plate
         else:
-            self.portal = location_by_pattern('{}_{}_PORTAL', alliance, position)
+            self.portal = find_location('{}_{}_PORTAL', alliance, position)
 
         self.cubes = 0  # PowerUpGame will preload Cubes for Portal Humans
         self.player = itertools.repeat("--")  # a no-op generator
@@ -498,7 +502,7 @@ class Human(Agent):
         def finish():
             if self.cubes > 0:
                 self.cubes -= 1
-                self.exchange_zone.cubes += 1
+                self.simulation.cubes[self.exchange_zone] += 1
 
         self.schedule_action(4, finish, 'put to Exchange')
 
@@ -516,7 +520,7 @@ class Human(Agent):
         def finish():
             if self.cubes > 0:
                 self.cubes -= 1
-                self.portal.cubes += 1
+                self.simulation.cubes[self.portal] += 1
 
         self.schedule_action(3, finish, 'put through Portal')
 
@@ -545,11 +549,11 @@ class Plate(object):
 
 class Scale(Agent):
     """A Scale, also the base class for Switch."""
-    def __init__(self, power_up_queue, front_color, alliance=''):
+    def __init__(self, simulation, power_up_queue, front_color, alliance=''):
         """
         :param front_color: RED or BLUE, selected by the FMS
         """
-        super(Scale, self).__init__(alliance, '(front:{})'.format(front_color))
+        super(Scale, self).__init__(simulation, alliance)
         self.power_up_queue = power_up_queue
         self.front_color = front_color
         self.front_plate = Plate(self._plate_name("Front"))
@@ -567,8 +571,8 @@ class Scale(Agent):
 
     def _setup_locations(self):
         """Set the adjacent Locations to point to the Plates."""
-        Location.FRONT_NULL_TERRITORY.adjacent_plate = self.front_plate
-        Location.BACK_NULL_TERRITORY.adjacent_plate = self.back_plate
+        self.simulation.plates[Location.FRONT_NULL_TERRITORY] = self.front_plate
+        self.simulation.plates[Location.BACK_NULL_TERRITORY] = self.back_plate
 
     @property
     def power_up_state(self):
@@ -580,7 +584,9 @@ class Scale(Agent):
 
     def csv_header(self):
         name = self.name
-        return [name + ' Owner', name + ' (Front, Back) Cubes', name + ' Power-Ups']
+        return [name + ' Owner',
+                '{} (Front:{}, Back) Cubes'.format(name, self.front_color),
+                name + ' Power-Ups']
 
     def csv_row(self):
         return [self.owner(), self.cubes, self.power_up_state]
@@ -639,12 +645,13 @@ class Scale(Agent):
 
 class Switch(Scale):
     """A Switch."""
-    def __init__(self, power_up_queue, front_color, alliance):
+    def __init__(self, simulation, power_up_queue, front_color, alliance):
         """
         :param front_color: RED or BLUE, selected by the FMS
         :param alliance: RED or BLUE end of the field
         """
-        super(Switch, self).__init__(power_up_queue, front_color, alliance)
+        super(Switch, self).__init__(
+            simulation, power_up_queue, front_color, alliance)
         self.active_power_up = None  # interlock between Force and Boost Power-Ups
         self.levitate_activated = False
 
@@ -654,10 +661,10 @@ class Switch(Scale):
 
     def _setup_locations(self):
         """Set up the adjacent Locations to refer to the Plates."""
-        location_by_pattern("{}_FRONT_INNER_ZONE", self.alliance
-                            ).adjacent_plate = self.front_plate
-        location_by_pattern("{}_BACK_INNER_ZONE", self.alliance
-                            ).adjacent_plate = self.back_plate
+        plates = self.simulation.plates
+        alliance = self.alliance
+        plates[find_location("{}_FRONT_INNER_ZONE", alliance)] = self.front_plate
+        plates[find_location("{}_BACK_INNER_ZONE", alliance)] = self.back_plate
 
     def force(self, alliance, is_start):
         """Start/end an alliance Force; no-op if this isn't the alliance's Switch."""
@@ -676,8 +683,8 @@ class Switch(Scale):
 
 class PowerUpQueue(Agent):
     """The FMS queue of Switch/Scale Power-Ups."""
-    def __init__(self):
-        super(PowerUpQueue, self).__init__('')
+    def __init__(self, simulation):
+        super(PowerUpQueue, self).__init__(simulation, '')
         self.queue = []  # queue[0] is the current action
 
     def _start_current_action(self):
@@ -787,8 +794,8 @@ class VaultColumn(object):
 
 class Vault(Agent):
     """An alliance's Vault for power-ups."""
-    def __init__(self, alliance, switch, scale):
-        super(Vault, self).__init__(alliance)
+    def __init__(self, simulation, alliance, switch, scale):
+        super(Vault, self).__init__(simulation, alliance)
         self.columns = tuple(VaultColumn(alliance, action, switch, scale)
                              for action in ('force', 'levitate', 'boost'))
         self.column_map = {column.action: column for column in self.columns}
@@ -828,7 +835,7 @@ def example_robot_player(robot):
     scale_side = "FRONT" if SCALE_FRONT_COLOR is alliance else "BACK"
 
     def drive_to(pattern, *args):
-        robot.drive_to(location_by_pattern(pattern, *args))
+        robot.drive_to(find_location(pattern, *args))
 
     def player1():
         robot.cubes = 1  # preload a Cube
@@ -909,33 +916,29 @@ class PowerUpGame(Simulation):
         super(PowerUpGame, self).__init__()
 
         # Create and add all the game objects.
-        self.power_up_queue = pq = PowerUpQueue()
+        # Construction order affects update() order.
+        self.power_up_queue = pq = PowerUpQueue(self)
 
-        self.robots = [Robot(alliance, position)
+        self.robots = [Robot(self, alliance, position)
                        for alliance in ALLIANCES
                        for position in xrange(1, 4)]
         self.robots_map = partition_by_alliance(self.robots)
 
-        self.red_switch = Switch(pq, SWITCH_FRONT_COLOR, RED)
-        self.blue_switch = Switch(pq, SWITCH_FRONT_COLOR, BLUE)
-        self.scale = Scale(pq, SCALE_FRONT_COLOR)
+        self.red_switch = Switch(self, pq, SWITCH_FRONT_COLOR, RED)
+        self.blue_switch = Switch(self, pq, SWITCH_FRONT_COLOR, BLUE)
+        self.scale = Scale(self, pq, SCALE_FRONT_COLOR)
         self.switches = {RED: self.red_switch, BLUE: self.blue_switch}
         self.seesaws = [self.red_switch, self.blue_switch, self.scale]
 
-        self.vaults = [Vault(RED, self.red_switch, self.scale),
-                       Vault(BLUE, self.blue_switch, self.scale)]
+        self.vaults = [Vault(self, RED, self.red_switch, self.scale),
+                       Vault(self, BLUE, self.blue_switch, self.scale)]
         self.vault_map = {vault.alliance: vault for vault in self.vaults}
 
-        self.humans = [Human(alliance, position, self.vault_map[alliance])
+        self.humans = [Human(self, alliance, position, self.vault_map[alliance])
                        for alliance in ALLIANCES
                        for position in ('FRONT', 'BACK', 'STATION')]
         self.humans_map = {(human.alliance, human.position): human
                            for human in self.humans}
-
-        # The order affects update() order and CSV column order.
-        for agent in itertools.chain(
-                self.robots, self.humans, self.seesaws, self.vaults, [pq]):
-            self.add(agent)
 
         # Start keeping score.
         self.score = Score.ZERO
