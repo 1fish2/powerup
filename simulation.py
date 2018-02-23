@@ -232,6 +232,9 @@ class Agent(object):
         """
         Schedule action() and self.scheduled_action_done() in `seconds`
         from now, replacing any currently scheduled action.
+
+        TODO: Consider random distributions for duration and success and
+        different durations to different Robots.
         """
         self.eta = self.time + seconds
         self.scheduled_action = action
