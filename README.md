@@ -1,4 +1,4 @@
-# Power-Up Scoring Simulation
+# Power Up Scoring Simulation
 
 This is a simulation of scoring in the FIRST Robotics Power Up game.
 

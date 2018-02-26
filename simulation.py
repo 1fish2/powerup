@@ -4,6 +4,7 @@
 FRC (FIRST Robotics) PowerUp game score simulation.
 
 TODO: More robot_player and human_player behaviors.
+TODO: Support random distributions for action duration and success.
 TODO: Split this file into framework simulation.py, agents, and game.py.
 TODO: Unit tests.
 """
@@ -232,9 +233,6 @@ class Agent(object):
         """
         Schedule action() and self.scheduled_action_done() in `seconds`
         from now, replacing any currently scheduled action.
-
-        TODO: Consider random distributions for duration and success and
-        different durations to different Robots.
         """
         self.eta = self.time + seconds
         self.scheduled_action = action
@@ -301,6 +299,13 @@ class Robot(Agent):
     """A Robot Agent, responsible for actions, not decisions."""
     def __init__(self, simulation, alliance, position, location=None):
         super(Robot, self).__init__(simulation, alliance, position)
+
+        # The Player can adjust these parameters to model Robot differences.
+        self.extra_drive_time = 0  # additional seconds per travel hop
+        self.pickup_time = 1  # seconds to pickup() a Cube
+        self.drop_time = 1  # seconds to drop() a Cube on the field
+        self.place_time = 2  # seconds to place() a Cube on a plate
+        self.climb_time = 4  # seconds to climb()
 
         if location is None:
             location = Location.RED_OUTER_ZONE if alliance is RED else Location.BLUE_OUTER_ZONE
@@ -379,7 +384,8 @@ class Robot(Agent):
                     and destination.is_inner_zone and self.autonomous):
                 self.auto_run = ScoreFactor.ACHIEVED
 
-        travel_time = TRAVEL_TIMES[(self.location, destination)]
+        travel_time = (TRAVEL_TIMES[(self.location, destination)]
+                       + self.extra_drive_time)
         self.schedule_action(travel_time, arrive, ('drive_to', destination.name))
 
     def pickup(self):
@@ -389,7 +395,7 @@ class Robot(Agent):
                 self.simulation.cubes[self.location] -= 1
                 self.cubes += 1
 
-        self.schedule_action(1, finish, 'pickup')
+        self.schedule_action(self.pickup_time, finish, 'pickup')
 
     def drop(self):
         """
@@ -402,7 +408,7 @@ class Robot(Agent):
                 self.simulation.cubes[self.location] += 1
                 self.cubes -= 1
 
-        self.schedule_action(1, finish, 'drop')
+        self.schedule_action(self.drop_time, finish, 'drop')
 
     def place(self):
         """
@@ -416,7 +422,7 @@ class Robot(Agent):
                 plate.cubes += 1
                 self.cubes -= 1
 
-        self.schedule_action(1, finish, 'place')
+        self.schedule_action(self.place_time, finish, 'place')
 
     def climb(self):
         """If possible, climb the Scale, canceling driving or any other action."""
@@ -425,7 +431,7 @@ class Robot(Agent):
                 self.climbed = 'Climbed'
 
         if self.at_platform:
-            self.schedule_action(4, finish, 'climb')
+            self.schedule_action(self.climb_time, finish, 'climb')
 
 
 class Human(Agent):
@@ -446,6 +452,13 @@ class Human(Agent):
         :param position: 'FRONT', 'BACK', or 'STATION'.
         """
         super(Human, self).__init__(simulation, alliance, position)
+
+        # The Player can adjust these parameters to model Human differences.
+        self.get_from_exchange_time = 4
+        self.put_to_exchange_time = 4
+        self.put_to_vault_time = 6
+        self.put_through_portal_time = 3
+        self.activate_power_up_time = 3
 
         self.vault = self.exchange_plate = self.exchange_zone = self.portal = None
         if position == 'STATION':
@@ -496,7 +509,8 @@ class Human(Agent):
                 self.exchange_plate.cubes -= 1
                 self.cubes += 1
 
-        self.schedule_action(4, finish, 'get from Exchange')
+        self.schedule_action(self.get_from_exchange_time, finish,
+                             'get from Exchange')
 
     def put_to_exchange(self):
         """
@@ -507,7 +521,8 @@ class Human(Agent):
                 self.cubes -= 1
                 self.simulation.cubes[self.exchange_zone] += 1
 
-        self.schedule_action(4, finish, 'put to Exchange')
+        self.schedule_action(self.put_to_exchange_time, finish,
+                             'put to Exchange')
 
     def put_to_vault(self, column_name):
         """Put a Cube into a Vault column 'force', 'levitate', or 'boost'."""
@@ -516,7 +531,8 @@ class Human(Agent):
                 self.cubes -= 1
                 self.vault.column_map[column_name].add_cube(1)
 
-        self.schedule_action(6, finish, 'put to {} Vault'.format(column_name))
+        self.schedule_action(self.put_to_vault_time, finish,
+                             'put to {} Vault'.format(column_name))
 
     def put_through_portal(self):
         """Put a Cube through the Portal onto the field."""
@@ -525,7 +541,8 @@ class Human(Agent):
                 self.cubes -= 1
                 self.simulation.cubes[self.portal] += 1
 
-        self.schedule_action(3, finish, 'put through Portal')
+        self.schedule_action(self.put_through_portal_time, finish,
+                             'put through Portal')
 
     def activate_power_up(self, column_name):
         """Push a Power-up button on a Vault column to try to Activate it."""
@@ -534,7 +551,8 @@ class Human(Agent):
 
         # The delay models the average time for the Human player to get
         # to the Vault, check the lights and Cubes, and push a button.
-        self.schedule_action(3, finish, 'activate {} Power-up'.format(column_name))
+        self.schedule_action(self.activate_power_up_time, finish,
+                             'activate {} Power-up'.format(column_name))
 
 
 class Plate(object):
