@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-FRC (FIRST Robotics) PowerUp game score simulation.
+FRC (FIRST Robotics) Power Up game score simulation.
 
 TODO: More robot_player and human_player behaviors.
 TODO: Support random distributions for action duration and success.
@@ -13,6 +13,7 @@ from collections import namedtuple, OrderedDict
 import csv
 from enum import Enum  # PyPI enum34
 import itertools
+import os.path
 
 AUTONOMOUS_SECS = 15
 TELEOP_SECS = 2 * 60 + 15
@@ -242,6 +243,23 @@ class Agent(object):
         """Called after a scheduled action completed."""
         pass
 
+    def wait(self, seconds):
+        """Wait 1 or more seconds, e.g. to simulate Robot turning in place
+        or driver indecision.
+        """
+        delay = max(seconds, 1)
+        self.schedule_action(delay, lambda: "done", "delay")
+
+    def wait_for_teleop(self):
+        """Schedule an action that just waits until the Teleop period. Yield if
+        this returns True, otherwise just go on since it's already Teleop.
+        """
+        delay = AUTONOMOUS_SECS - self.time
+        if delay > 0:
+            self.schedule_action(delay, lambda: "done", "wait for Teleop")
+            return True
+        return False
+
 
 class GameOver(Exception):
     pass
@@ -313,6 +331,7 @@ class Robot(Agent):
         self.cubes = 0
         self.climbed = ''  # one of {'', 'Climbed', 'Levitated'}
         self.auto_run = ScoreFactor.NOT_YET
+        self.behavior = ''
         self.player = itertools.repeat("--")  # a no-op generator
 
     def __str__(self):
@@ -326,10 +345,11 @@ class Robot(Agent):
 
     def csv_header(self):
         name = self.name
-        return [name + ' Location', name + ' Cubes', name + ' Action']
+        return [name + ' Behavior', name + ' Action', name + ' Location', name + ' Cubes']
 
     def csv_row(self):
-        return [self.location.name, self.cubes, str(self.scheduled_action_description)]
+        return [self.behavior, str(self.scheduled_action_description),
+                self.location.name, self.cubes]
 
     def csv_end_header(self):
         name = self.name
@@ -353,9 +373,7 @@ class Robot(Agent):
 
     def scheduled_action_done(self):
         """A scheduled action completed so start the next one."""
-        # TODO: Put the returned description in CSV output? Else have
-        # the generator just return ().
-        self.player.next()
+        self.behavior = self.player.next()
 
     def set_player(self, generator):
         """
@@ -363,20 +381,20 @@ class Robot(Agent):
         to do the initial actions.
         """
         self.player = generator
-        self.scheduled_action_done()
+        if not self.scheduled_action:
+            self.scheduled_action_done()
 
-    def drive_to(self, destination):
+    def drive_to(self, destination, *args):
         """
-        Begin driving to the destination Location or Location name,
-        replacing any current action. Does no p
-        ath planning -- raises
-        KeyError if the destination is not adjacent.
+        Begin driving to the destination Location or Location name
+        pattern + args, replacing any current action. Raise KeyError if
+        the destination is not adjacent (no path planning here).
         """
         if self.climbed:
             return  # Can't drive now.
 
         if isinstance(destination, str):
-            destination = Location[destination]
+            destination = find_location(destination, *args)
 
         def arrive():
             self.location = destination
@@ -387,6 +405,12 @@ class Robot(Agent):
         travel_time = (TRAVEL_TIMES[(self.location, destination)]
                        + self.extra_drive_time)
         self.schedule_action(travel_time, arrive, ('drive_to', destination.name))
+
+    def drive_path(self, *locations):
+        """Drive a sequence of Location steps, yielding after each step."""
+        for step in locations:
+            self.drive_to(step)
+            yield "driving through"
 
     def pickup(self):
         """If there's a Cube here and room in the Robot, pick it up."""
@@ -414,7 +438,10 @@ class Robot(Agent):
         """
         If possible, place a Cube from the Robot on the adjacent
         Switch/Scale/Exchange Plate.
-        TODO: Should the Exchange conveyor Plate support multiple Cubes?
+
+        ASSUMES: Each Plate can hold all Cubes we can get to place() on
+        it, including the Exchange conveyor Plate, whether the
+        STATION Human is getting them or not.
         """
         def finish():
             plate = self.simulation.plates[self.location]
@@ -470,6 +497,7 @@ class Human(Agent):
             self.portal = find_location('{}_{}_PORTAL', alliance, position)
 
         self.cubes = 0  # PowerUpGame will preload Cubes for Portal Humans
+        self.behavior = ''
         self.player = itertools.repeat("--")  # a no-op generator
 
     def __str__(self):
@@ -477,25 +505,26 @@ class Human(Agent):
 
     def csv_header(self):
         name = self.name
-        header = [name + ' Cubes', name + ' Action']
+        header = [name + ' Behavior', name + ' Action', name + ' Cubes']
         if self.exchange_plate:
             header.append('{} Exchange Cubes'.format(self.alliance))
         return header
 
     def csv_row(self):
-        row = [self.cubes, str(self.scheduled_action_description)]
+        row = [self.behavior, str(self.scheduled_action_description), self.cubes]
         if self.exchange_plate:
             row.append(self.exchange_plate.cubes)
         return row
 
     def scheduled_action_done(self):
         """A scheduled action completed so start the next one."""
-        self.player.next()
+        self.behavior = self.player.next()
 
     def set_player(self, generator):
         """Set the player decider and generate its initial action."""
         self.player = generator
-        self.scheduled_action_done()
+        if not self.scheduled_action:
+            self.scheduled_action_done()
 
     @property
     def vault_cubes(self):
@@ -848,15 +877,15 @@ def example_robot_player(robot):
     time it needs instructions; this generator in turn updates the Robot
     and returns a behavior description.
     """
-    # First cut: Preload Cubes in all Robots, drive to earn auto-run
-    # points, and place a Cube.
+    # Here: Preload Cubes in all Robots, drive to earn auto-run points,
+    # and place Cubes.
 
     alliance = robot.alliance
     switch_side = "FRONT" if SWITCH_FRONT_COLOR is alliance else "BACK"
     scale_side = "FRONT" if SCALE_FRONT_COLOR is alliance else "BACK"
 
     def drive_to(pattern, *args):
-        robot.drive_to(find_location(pattern, *args))
+        robot.drive_to(pattern, *args)
 
     def player1():
         robot.cubes = 1  # preload a Cube
@@ -892,7 +921,7 @@ def example_robot_player(robot):
         yield "to Exchange"
 
         robot.place()
-        yield "place a Cube into the Exchange"
+        yield "place a Cube in the Exchange"
 
         drive_to("{}_OUTER_ZONE", alliance)
         yield "auto-run"
@@ -917,6 +946,9 @@ def example_human_player(human):
     The actions depend on player position.
     """
     def player():
+        if human.wait_for_teleop():
+            yield "wait for Teleop"
+
         # TODO: Human player behaviors...
         while True:
             yield "done"
@@ -1025,9 +1057,11 @@ class PowerUpGame(Simulation):
     def csv_end_row(self):
         return ['Final', self.score]
 
-    def play(self, csv_writer):
-        """Play out the simulated game."""
+    def play(self, output_file):
+        """Play out the simulated game, writing a CSV report to `output_file`."""
         # TODO: Include # Cubes at each Location in the CSV output?
+        csv_writer = csv.writer(output_file)
+
         csv_contributors = [self] + self.agents.values()
         header = sum((c.csv_header() for c in csv_contributors), [])
         csv_writer.writerow(header)
@@ -1061,9 +1095,16 @@ class PowerUpGame(Simulation):
         print
 
 
+def play(robot_player, human_player, output_root_name):
+    """Play a simulation, deriving the output .csv filename from output_root_name.
+    (Within a Python source file, __file__ is its full filename.)
+    """
+    output_filename = os.path.splitext(os.path.basename(output_root_name))[0] + '.csv'
+
+    with open(output_filename, 'wb') as out:
+        game = PowerUpGame(robot_player, human_player)
+        game.play(out)
+
+
 if __name__ == "__main__":
-    with open('powerup-output.csv', 'wb') as f:
-        writer = csv.writer(f)
-        game = PowerUpGame(robot_player=example_robot_player,
-                           human_player=example_human_player)
-        game.play(writer)
+    play(example_robot_player, example_human_player, __file__)
