@@ -3,10 +3,9 @@
 """
 FRC (FIRST Robotics) Power Up game score simulation.
 
-TODO: More robot_player and human_player behaviors.
-TODO: Support random distributions for action duration and success.
-TODO: Split this file into framework simulation.py, agents, and game.py.
 TODO: Unit tests.
+TODO: Split this file into framework simulation.py, agents, and game.py.
+TODO: Support random distributions for action duration and success.
 """
 
 from collections import namedtuple, OrderedDict
@@ -245,10 +244,10 @@ class Agent(object):
 
     def wait(self, seconds):
         """Wait 1 or more seconds, e.g. to simulate Robot turning in place
-        or driver indecision.
+        or driver decision-making time.
         """
         delay = max(seconds, 1)
-        self.schedule_action(delay, lambda: "done", "delay")
+        self.schedule_action(delay, lambda: "done", "wait")
 
     def wait_for_teleop(self):
         """Schedule an action that just waits until the Teleop period. Yield if
@@ -286,7 +285,7 @@ class Simulation(object):
     @property
     def autonomous(self):
         """Return True during the autonomous period."""
-        return self.time < AUTONOMOUS_SECS
+        return self.time <= AUTONOMOUS_SECS
 
     def add(self, agent):
         """Add an Agent to this Simulation.
@@ -296,7 +295,9 @@ class Simulation(object):
         self.agents[agent.name] = agent
 
     def tick(self):
-        """Advance time by 1 second, updating all Agents."""
+        """Advance time by 1 second and update all Agents. In the first
+        tick, update(1) computes what an Agent does in second #1.
+        """
         time = self.time + 1
         if time > GAME_SECS:
             raise GameOver()
@@ -358,6 +359,11 @@ class Robot(Agent):
     def csv_end_row(self):
         return [self.climbed]
 
+    def update(self, time):
+        if not self.scheduled_action:
+            self.scheduled_action_done()  # Start the generator.
+        super(Robot, self).update(time)
+
     def score(self):
         if self.auto_run is ScoreFactor.ACHIEVED:
             points = Score.pick(self.alliance, 5)
@@ -376,13 +382,8 @@ class Robot(Agent):
         self.behavior = self.player.next()
 
     def set_player(self, generator):
-        """
-        Set the generator that chooses Robot actions and call it once
-        to do the initial actions.
-        """
+        """Set the generator that chooses Robot actions and initialize."""
         self.player = generator
-        if not self.scheduled_action:
-            self.scheduled_action_done()
 
     def drive_to(self, destination, *args):
         """
@@ -398,8 +399,15 @@ class Robot(Agent):
 
         def arrive():
             self.location = destination
+            # Check if this Robot completed the auto-run. Allow 1 extra
+            # second because this completion action runs at the start of
+            # a second, noticing that the Robot finished its drive_to()
+            # step, and actually the Robot's bumper just needs to break
+            # the vertical plane of the Auto Line; the Robot needn't
+            # finish driving into the Inner Zone.
             if (self.auto_run is ScoreFactor.NOT_YET
-                    and destination.is_inner_zone and self.autonomous):
+                    and destination.is_inner_zone
+                    and self.time <= AUTONOMOUS_SECS + 1):
                 self.auto_run = ScoreFactor.ACHIEVED
 
         travel_time = (TRAVEL_TIMES[(self.location, destination)]
@@ -516,15 +524,18 @@ class Human(Agent):
             row.append(self.exchange_plate.cubes)
         return row
 
+    def update(self, time):
+        if not self.scheduled_action:
+            self.scheduled_action_done()  # Start the generator.
+        super(Human, self).update(time)
+
     def scheduled_action_done(self):
         """A scheduled action completed so start the next one."""
         self.behavior = self.player.next()
 
     def set_player(self, generator):
-        """Set the player decider and generate its initial action."""
+        """Set the generator that chooses Human actions and initialize."""
         self.player = generator
-        if not self.scheduled_action:
-            self.scheduled_action_done()
 
     @property
     def vault_cubes(self):
@@ -1012,11 +1023,12 @@ class PowerUpGame(Simulation):
 
     def tick(self):
         """Advance time and update the running score."""
+        super(PowerUpGame, self).tick()
+
         if self.time == AUTONOMOUS_SECS:
             self.auto_switch_owners = Score(int(self.red_switch.owner() is RED),
                                             int(self.blue_switch.owner() is BLUE))
 
-        super(PowerUpGame, self).tick()
         self.score = sum((agent.score() for agent in self.agents.itervalues()),
                          self.score)
 

@@ -43,6 +43,12 @@ def robot_player(robot):
             yield "done"
 
     def player2():
+        # Model a slightly slower Robot in one alliance. With both #2
+        # Robots placing Cubes on the Scale, RED will own the Scale for
+        # 1 second before BLUE matches its Cube.
+        if alliance is BLUE:
+            robot.place_time += 1
+
         robot.cubes = 1
 
         drive_to("{}_{}_INNER_ZONE", alliance, scale_side)
@@ -95,6 +101,13 @@ def robot_player(robot):
             yield "done"
 
     def blue3():
+        # Model a slightly slower robot.
+        robot.extra_drive_time += 1
+        robot.pickup_time += 2
+        robot.drop_time += 1
+        robot.place_time += 0
+        robot.climb_time += 2
+
         robot.cubes = 1
 
         drive_to(exchange_zone)
