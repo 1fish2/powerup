@@ -103,6 +103,11 @@ class TestSimulation(object):
 
         assert len(sim.agents) == 1
         assert sim.agents[agent.name] is agent
+        assert sim.cubes[Location.RED_SWITCH_FENCE] == 6
+        assert sim.cubes[Location.BLUE_SWITCH_FENCE] == 6
+        assert sim.cubes[Location.RED_POWER_CUBE_ZONE] == 10
+        assert sim.cubes[Location.BLUE_POWER_CUBE_ZONE] == 10
+        assert sim.cubes[Location.BLUE_FRONT_INNER_ZONE] == 0
 
         # Schedule an action and step time forward to run it.
         agent.schedule_action(2, doit, 'inc')
@@ -138,3 +143,122 @@ class TestSimulation(object):
         assert not agent.autonomous
         assert agent.actions == 2
         assert agent.score() == Score(116, 102)  # 16 ticks, 2 actions done
+
+    def test_robot(self):
+        sim = Simulation()
+        sim.cubes[Location.BLUE_OUTER_ZONE] = 1
+
+        robot = Robot(sim, BLUE, 'First-Base')
+        robot.pickup_time = 2
+        robot.drop_time = 2
+        robot.place_time = 2
+        robot.climb_time = 2
+        assert robot.name == 'BLUE First-Base Robot'
+        assert robot.location is Location.BLUE_OUTER_ZONE
+        assert robot.cubes == 0
+        assert not robot.at_platform
+
+        sim.tick()
+        assert robot.autonomous
+
+        # pickup()
+        robot.pickup()
+        for _ in xrange(2):
+            assert robot.cubes == 0
+            assert sim.cubes[Location.BLUE_OUTER_ZONE] == 1
+            sim.tick()
+        assert robot.cubes == 1
+        assert sim.cubes[Location.BLUE_OUTER_ZONE] == 0
+
+        # drive_to(BLUE_FRONT_INNER_ZONE) and get auto-run points
+        ticks = TRAVEL_TIMES[(Location.BLUE_OUTER_ZONE, Location.BLUE_FRONT_INNER_ZONE)]
+        assert robot.auto_run is ScoreFactor.NOT_YET
+        assert robot.score() == Score.ZERO
+        robot.drive_to(Location.BLUE_FRONT_INNER_ZONE)
+        for _ in xrange(ticks):
+            assert robot.location is Location.BLUE_OUTER_ZONE
+            sim.tick()
+        assert robot.location is Location.BLUE_FRONT_INNER_ZONE
+        assert robot.auto_run is ScoreFactor.ACHIEVED
+        assert robot.score() == Score(0, 5)
+        assert robot.auto_run is ScoreFactor.COUNTED
+
+        # Try to pickup() but the Robot already has a Cube
+        sim.cubes[robot.location] = 1
+        robot.pickup()
+        for _ in xrange(2):
+            sim.tick()
+            assert robot.cubes == 1
+            assert sim.cubes[robot.location] == 1
+
+        # drop()
+        robot.drop()
+        for _ in xrange(2):
+            assert robot.cubes == 1
+            assert sim.cubes[robot.location] == 1
+            sim.tick()
+        assert robot.cubes == 0
+        assert sim.cubes[robot.location] == 2
+
+        # Try to drop() but the Robot has no Cubes
+        for _ in xrange(2):
+            sim.tick()
+            assert robot.cubes == 0
+            assert sim.cubes[robot.location] == 2
+
+        # Try to pickup() but no Cubes here
+        sim.cubes[robot.location] = 0
+        robot.pickup()
+        for _ in xrange(2):
+            sim.tick()
+            assert robot.cubes == 0
+            assert sim.cubes[robot.location] == 0
+
+        # Try to place() but no Plate here
+        robot.cubes = 1
+        robot.place()
+        for _ in xrange(2):
+            sim.tick()
+            assert robot.cubes == 1
+
+        # place() on a Plate
+        sim.plates[robot.location] = plate = Plate("Gold")
+        robot.place()
+        for _ in xrange(2):
+            assert robot.cubes == 1
+            assert plate.cubes == 0
+            sim.tick()
+        assert robot.cubes == 0
+        assert plate.cubes == 1
+
+        # Try to place() but the Robot has no Cubes
+        robot.place()
+        for _ in xrange(2):
+            sim.tick()
+            assert robot.cubes == 0
+            assert plate.cubes == 1
+
+        # Try to climb() but not on the Platform
+        robot.climb()
+        assert not robot.scheduled_action  # can't start climbing from off-platform
+        assert robot.endgame_score() == Score.ZERO  # didn't get on-platform
+
+        robot.drive_to(Location.BLUE_PLATFORM)
+        ticks = TRAVEL_TIMES[(Location.BLUE_FRONT_INNER_ZONE, Location.BLUE_PLATFORM)]
+        for _ in xrange(ticks):
+            assert robot.location is Location.BLUE_FRONT_INNER_ZONE
+            sim.tick()
+        assert robot.location is Location.BLUE_PLATFORM
+        assert robot.endgame_score() == Score(0, 5)  # 5 points on-platform
+
+        # climb() and TODO: endgame_score()
+        robot.climb()
+        for _ in xrange(2):
+            assert not robot.climbed
+            sim.tick()
+        assert robot.climbed
+        assert robot.endgame_score() == Score(0, 30)  # climbed
+
+        # Try to drive() but can't after climbing
+        robot.drive_to(Location.BLUE_FRONT_INNER_ZONE)
+        assert not robot.scheduled_action  # can't start driving after climbing
