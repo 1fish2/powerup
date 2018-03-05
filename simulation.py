@@ -3,7 +3,6 @@
 """
 FRC (FIRST Robotics) Power Up game score simulation.
 
-TODO: Unit tests.
 TODO: Split this file into framework simulation.py, agents, and game.py.
 TODO: Support random distributions for action duration and success.
 """
@@ -128,6 +127,7 @@ _init_locations()
 
 
 def typename(value):
+    """Return the name of value's type without any module name."""
     return type(value).__name__
 
 
@@ -144,7 +144,9 @@ class Score(namedtuple('Score', 'red blue')):
         return Score(self.red + other.red, self.blue + other.blue)
 
     def wlt_rp(self):
-        """Return the Win-Loss-Tie Ranking Point Score for this final point Score."""
+        """Return the Win-Loss-Tie Ranking Point Score for this final point
+        Score, e.g. (0, 2) for a BLUE win; (1, 1) for a tie.
+        """
         # __cmp__() returns {-1, 0, 1} for {loss, tie, win}. +1 -> {0, 1, 2}.
         red_points = self.red.__cmp__(self.blue) + 1
         return Score(red_points, 2 - red_points)

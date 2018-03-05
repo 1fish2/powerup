@@ -17,6 +17,9 @@ coverage.xml
 nosetests.xml
 nosetests.*.xml
 
+# Pytest files and directories
+.pytest_cache
+
 # Temporary files
 /tmp/
 

@@ -3,3 +3,4 @@
 # preferably in a Python virtual environment (pyenv).
 
 enum34==1.1.6
+pytest==3.4.1

@@ -157,4 +157,8 @@ def human_player(human):
 
 
 if __name__ == "__main__":
+    """If desired, set different values for these FMS start-of-match choices:
+        SWITCH_FRONT_COLOR, SCALE_FRONT_COLOR = BLUE, RED
+    """
+
     play(robot_player, human_player, __file__)
