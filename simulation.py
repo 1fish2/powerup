@@ -362,6 +362,8 @@ class Robot(Agent):
         return [self.climbed]
 
     def update(self, time):
+        # Start/resume the action generator if it's not waiting for a
+        # scheduled_action to finish.
         if not self.scheduled_action:
             self.scheduled_action_done()  # Start the generator.
         super(Robot, self).update(time)

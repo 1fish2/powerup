@@ -262,3 +262,39 @@ class TestSimulation(object):
         # Try to drive() but can't after climbing
         robot.drive_to(Location.BLUE_FRONT_INNER_ZONE)
         assert not robot.scheduled_action  # can't start driving after climbing
+
+    def test_robot_player(self):
+        """Test that a Robot starts its 'player' action generator at the
+        beginning and after an impossible climb() doesn't start an action.
+        """
+        sim = Simulation()
+        robot = Robot(sim, RED, 'Catcher')
+        sim.cubes[robot.location] = 1
+        robot.climb_time = 10
+        robot.pickup_time = 3
+
+        def player():
+            # This won't schedule an action since the Robot is off the Platform.
+            robot.climb()
+            yield "not climbing"
+
+            robot.pickup()
+            yield "picking up"
+
+            while True:
+                yield "done"
+
+        robot.set_player(player())
+        assert robot.behavior == ''
+
+        sim.tick()
+        assert robot.behavior == "not climbing"
+
+        for _ in xrange(robot.pickup_time):
+            sim.tick()
+            assert robot.cubes == 0
+            assert robot.behavior == "picking up"
+
+        sim.tick()
+        assert robot.cubes == 1
+        assert robot.behavior == "done"
